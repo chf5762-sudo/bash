@@ -2,15 +2,27 @@
 
 # --- Tailscale 一键卸载脚本 ---
 
-# 提示用户确认
-echo "此脚本将尝试完全卸载 Tailscale。"
-echo "这包括停止服务、删除软件包以及清除相关配置文件和数据目录。"
-echo "如果您在卸载后打算重新安装，请注意您将需要重新认证设备。"
-read -p "您确定要继续吗？(y/N): " confirm
+# 默认需要确认
+CONFIRM=false
 
-if [[ "$confirm" != [yY] ]]; then
-    echo "操作已取消。"
-    exit 0
+# 检查参数，如果传入 -y 或 --force 则跳过确认
+for arg in "$@"; do
+    case "$arg" in
+        -y|--force)
+            CONFIRM=true
+            ;;
+    esac
+done
+
+if [[ "$CONFIRM" == "false" ]]; then
+    echo "此脚本将尝试完全卸载 Tailscale。"
+    echo "这包括停止服务、删除软件包以及清除相关配置文件和数据目录。"
+    echo "如果您在卸载后打算重新安装，请注意您将需要重新认证设备。"
+    read -p "您确定要继续吗？(y/N): " user_confirm
+    if [[ "$user_confirm" != [yY] ]]; then
+        echo "操作已取消。"
+        exit 0
+    fi
 fi
 
 echo "-------------------------------------"

@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# --- Tailscale 一键安装并配置 Exit Node 脚本 ---
+
+# 默认需要确认，除非传入 -y 或 --force
+CONFIRM=false
+# Tailscale 安装完成后是否启动 Exit Node
+ENABLE_EXIT_NODE=false
+
+# 检查参数
+for arg in "$@"; do
+    case "$arg" in
+        -y|--force)
+            CONFIRM=true
+            ;;
+        --exit-node)
+            ENABLE_EXIT_NODE=true
+            ;;
+    esac
+done
+
+if [[ "$CONFIRM" == "false" ]]; then
+    echo "此脚本将尝试安装 Tailscale，配置 IP 转发，并可选地设置该节点为 Exit Node。"
+    echo "安装完成后，您需要手动在浏览器中认证此设备。"
+    echo "如需跳过确认并启用 Exit Node，请使用 '-- -y --exit-node' 参数。"
+    read -p "您确定要继续吗？(y/N): " user_confirm
+    if [[ "$user_confirm" != [yY] ]]; then
+        echo "操作已取消。"
+        exit 0
+    fi
+fi
+
+echo "-------------------------------------"
+echo "正在检测操作系统并安装 Tailscale..."
+
+# 检测操作系统并安装 Tailscale
+if grep -Eq "debian|ubuntu|mint" /etc/os-release; then
+    echo "检测到 Debian/Ubuntu/Mint 系统，使用 apt 安装..."
+    sudo apt update
+    sudo apt install -y curl apt-transport-https gnupg
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).gpg | sudo gpg --dearmor -o /usr/share/keyrings/tailscale-archive-keyring.gpg
+    curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/$(lsb_release -cs).tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+    sudo apt update
+    sudo apt install -y tailscale
+elif grep -Eq "centos|rhel|fedora" /etc/os-release; then
+    echo "检测到 CentOS/RHEL/Fedora 系统，使用 yum/dnf 安装..."
+    sudo dnf install -y curl # 对于CentOS/RHEL/Fedora，通常预装了dnf/yum
+    # Add Tailscale repo for RHEL/CentOS/Fedora
+    sudo curl -fsSL https://pkgs.tailscale.com/stable/centos/$(grep -oP '(?<=^VERSION_ID=)[0-9]+' /etc/os-release).repo | sudo tee /etc/yum.repos.d/tailscale.repo
+    sudo yum check-update || true # 某些系统上yum check-update可能会失败，但不会影响安装
+    sudo dnf install -y tailscale || sudo yum install -y tailscale
+else
+    echo "警告：无法自动识别您的操作系统或其包管理器。"
+    echo "请尝试手动安装 Tailscale。"
+    exit 1
+fi
+
+echo "-------------------------------------"
+echo "正在启用 IP 转发..."
+# 启用 IPv4 转发
+sudo sysctl -w net.ipv4.ip_forward=1
+sudo sysctl -p /etc/sysctl.conf
+
+# 启用 IPv6 转发 (如果需要)
+sudo sysctl -w net.ipv6.conf.all.forwarding=1
+sudo sysctl -p /etc/sysctl.conf
+
+# 确保 IP 转发在重启后持久化
+if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+    echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+fi
+if ! grep -q "net.ipv6.conf.all.forwarding=1" /etc/sysctl.conf; then
+    echo "net.ipv6.conf.all.forwarding=1" | sudo tee -a /etc/sysctl.conf
+fi
+
+echo "IP 转发已启用并设置为持久化。"
+
+echo "-------------------------------------"
+echo "正在启动 Tailscale 服务..."
+sudo systemctl enable tailscaled --now
+
+echo "-------------------------------------"
+echo "正在尝试连接 Tailscale 并设置..."
+
+if [[ "$ENABLE_EXIT_NODE" == "true" ]]; then
+    echo "尝试将此节点配置为 Exit Node..."
+    # 注意：这里的 --advertise-exit-node 需要在 Tailscale 控制台手动批准
+    sudo tailscale up --accept-routes --advertise-exit-node --reset
+    echo "Tailscale 已启动，并已尝试将此节点设置为 Exit Node。"
+    echo "您需要在 Tailscale 管理控制台手动授权此设备并启用其 Exit Node 功能。"
+else
+    sudo tailscale up --reset
+    echo "Tailscale 已启动。"
+fi
+
+echo "-------------------------------------"
+echo "安装和初步配置已完成。"
+echo "请将上方 'http://ts.net/...' 的链接复制到您的浏览器中，登录并授权此设备。"
+echo "如果您设置了 Exit Node，请记住要在 Tailscale 管理控制台手动批准其作为出口节点。"
+echo "授权后，您可以使用 'tailscale status' 查看设备连接状态。"
+echo ""
+echo "重要：登录 Tailscale 管理控制台 (https://login.tailscale.com/admin/machines) 并在该设备的设置中启用 '允许用作出口节点'。"

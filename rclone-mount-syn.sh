@@ -179,7 +179,11 @@ configure_rclone() {
 create_mount_service() {
     local remote_name=$1
     local mount_point=$2
+    local remote_path=$3
     local service_name="rclone-mount-${remote_name}"
+    
+    # 构建远程路径
+    local full_remote="${remote_name}:${remote_path}"
     
     cat > "/etc/systemd/system/${service_name}.service" <<EOF
 [Unit]
@@ -193,7 +197,7 @@ User=root
 Group=root
 Environment=RCLONE_CONFIG=${RCLONE_CONFIG}
 ExecStartPre=/bin/mkdir -p ${mount_point}
-ExecStart=/usr/bin/rclone mount ${remote_name}: ${mount_point} \\
+ExecStart=/usr/bin/rclone mount ${full_remote} ${mount_point} \\
     --config=${RCLONE_CONFIG} \\
     --allow-other \\
     --vfs-cache-mode writes \\
@@ -227,13 +231,17 @@ create_sync_service() {
     local mount_point=$2
     local sync_dir=$3
     local sync_interval=$4
+    local remote_path=$5
     local service_name="rclone-sync-${remote_name}"
+    
+    # 构建远程路径
+    local full_remote="${remote_name}:${remote_path}"
     
     # 创建同步脚本
     cat > "$SCRIPT_DIR/sync-${remote_name}.sh" <<EOF
 #!/bin/bash
 export RCLONE_CONFIG=${RCLONE_CONFIG}
-/usr/bin/rclone sync ${remote_name}: ${sync_dir} \\
+/usr/bin/rclone sync ${full_remote} ${sync_dir} \\
     --config=${RCLONE_CONFIG} \\
     --transfers 4 \\
     --checkers 8 \\
@@ -285,6 +293,7 @@ save_config() {
     local sync_enabled=$4
     local sync_dir=$5
     local sync_interval=$6
+    local remote_path=$7
     
     cat > "$CONFIG_FILE" <<EOF
 {
@@ -294,7 +303,8 @@ save_config() {
     "sync_enabled": $sync_enabled,
     "sync_dir": "$sync_dir",
     "sync_interval": "$sync_interval",
-    "rclone_config": "$RCLONE_CONFIG"
+    "rclone_config": "$RCLONE_CONFIG",
+    "remote_path": "$remote_path"
 }
 EOF
 }
@@ -330,6 +340,13 @@ main_menu() {
         echo -e "${RED}远程名称不能为空${NC}"
         exit 1
     fi
+    
+    # 询问是否指定云盘子目录
+    echo -e "\n${BLUE}是否只挂载云盘的特定文件夹？${NC}"
+    echo "留空表示挂载整个云盘，输入路径表示只挂载该文件夹"
+    echo "示例: /我的文件/照片 或 /Documents/Work"
+    read -p "云盘子目录路径 [默认: 空，挂载整个云盘]: " remote_path
+    remote_path=${remote_path}
     
     read -p "请输入挂载目录 [默认: /mnt/${remote_name}]: " mount_point
     mount_point=${mount_point:-/mnt/${remote_name}}
@@ -403,15 +420,15 @@ main_menu() {
     fi
     
     # 创建挂载服务
-    create_mount_service "$remote_name" "$mount_point"
+    create_mount_service "$remote_name" "$mount_point" "$remote_path"
     
     # 创建同步服务
     if [ "$sync_enabled" = true ]; then
-        create_sync_service "$remote_name" "$mount_point" "$sync_dir" "$sync_interval"
+        create_sync_service "$remote_name" "$mount_point" "$sync_dir" "$sync_interval" "$remote_path"
     fi
     
     # 保存配置
-    save_config "$remote_name" "$cloud_type" "$mount_point" "$sync_enabled" "$sync_dir" "$sync_interval"
+    save_config "$remote_name" "$cloud_type" "$mount_point" "$sync_enabled" "$sync_dir" "$sync_interval" "$remote_path"
     
     echo -e "\n${GREEN}╔════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║         配置完成！                     ║${NC}"
@@ -419,6 +436,11 @@ main_menu() {
     echo -e "\n${BLUE}配置信息:${NC}"
     echo -e "  远程名称: ${YELLOW}$remote_name${NC}"
     echo -e "  云盘类型: ${YELLOW}$cloud_type${NC}"
+    if [ -n "$remote_path" ]; then
+        echo -e "  云盘路径: ${YELLOW}$remote_path${NC}"
+    else
+        echo -e "  云盘路径: ${YELLOW}/ (整个云盘)${NC}"
+    fi
     echo -e "  挂载目录: ${YELLOW}$mount_point${NC}"
     echo -e "  配置文件: ${YELLOW}$RCLONE_CONFIG${NC}"
     if [ "$sync_enabled" = true ]; then

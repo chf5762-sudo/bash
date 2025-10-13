@@ -22,7 +22,6 @@ fi
 
 # --- 1. 安装 rclone 和 fuse ---
 echo -e "${GREEN}--- 1. 正在安装/更新 rclone 和 fuse ---${NC}"
-# 移除 expect 的安装，因为它不再被使用
 if command -v apt &> /dev/null; then
     apt update && apt install -y rclone fuse unzip curl
 elif command -v yum &> /dev/null; then
@@ -100,12 +99,15 @@ for opt in $selected_options; do
     remote_name="${remote_name:-$default_remote_name}"
 
     echo -e "${YELLOW}即将开始 rclone config 交互式配置。请按照提示操作。${NC}"
+    echo -e "${YELLOW}当提示 'name' 时输入 '${remote_name}'。${NC}"
+    echo -e "${YELLOW}当提示 'Storage' 时，请根据列表选择数字。${NC}"
     echo -e "${YELLOW}提示 'yes/no' 时，直接按回车键通常表示 'yes'。${NC}"
     echo -e "${YELLOW}当要求在本地浏览器授权并粘贴 Token 时，请务必完成操作。${NC}"
     echo -e "${YELLOW}-----------------------------------------------------------${NC}"
 
-    # 运行 rclone config，完全交由用户交互
-    rclone config --config="$RCLONE_CONFIG_PATH" --remote-name "$remote_name"
+    # 运行 rclone config，完全交由用户交互，不再传递 --remote-name
+    # 用户在 rclone config 菜单中选择 n (New remote) 后，会提示输入 name
+    sudo rclone config --config="$RCLONE_CONFIG_PATH"
 
     echo -e "${YELLOW}-----------------------------------------------------------${NC}"
     read -p "${YELLOW}请确保 ${remote_name} 已成功配置 (检查 '/rclone.conf' 文件)。按 Enter 继续...${NC}"

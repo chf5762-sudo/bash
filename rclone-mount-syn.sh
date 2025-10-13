@@ -3,7 +3,8 @@
 # rclone 云盘管理脚本
 # 功能：交互式配置、自动挂载、定时同步
 
-set -e
+# 不要在遇到错误时立即退出，因为我们需要处理用户输入
+set -u
 
 #=============================================================================
 # 默认远程名称配置表
@@ -146,14 +147,29 @@ configure_rclone() {
     
     echo -e "${YELLOW}正在配置 rclone...${NC}"
     echo -e "${BLUE}请按照提示完成 OAuth 认证或输入相关信息${NC}"
+    echo ""
     
-    RCLONE_CONFIG="$RCLONE_CONFIG" rclone config create "$remote_name" "$cloud_type" --non-interactive=false
+    # 检查是否已存在同名配置
+    if RCLONE_CONFIG="$RCLONE_CONFIG" rclone listremotes 2>/dev/null | grep -q "^${remote_name}:$"; then
+        echo -e "${YELLOW}警告: 远程名称 '${remote_name}' 已存在${NC}"
+        read -p "是否删除并重新配置? (y/n): " overwrite
+        if [[ "$overwrite" == "y" || "$overwrite" == "Y" ]]; then
+            RCLONE_CONFIG="$RCLONE_CONFIG" rclone config delete "$remote_name"
+        else
+            echo -e "${RED}已取消配置${NC}"
+            return 1
+        fi
+    fi
+    
+    # 使用交互式配置
+    RCLONE_CONFIG="$RCLONE_CONFIG" rclone config create "$remote_name" "$cloud_type"
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}rclone 配置成功${NC}"
+        return 0
     else
-        echo -e "${RED}rclone 配置失败${NC}"
-        exit 1
+        echo -e "${RED}rclone 配置失败，请重试${NC}"
+        return 1
     fi
 }
 
@@ -286,16 +302,20 @@ main_menu() {
     echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}║     RClone 云盘管理脚本 v1.0          ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
+    echo ""
     
     show_cloud_list
     
-    read -p "请选择云盘类型 (1-13): " cloud_choice
-    
-    cloud_type=$(get_cloud_type "$cloud_choice")
-    if [ -z "$cloud_type" ]; then
-        echo -e "${RED}无效选择${NC}"
-        exit 1
-    fi
+    # 读取云盘选择
+    while true; do
+        read -p "请选择云盘类型 (1-13): " cloud_choice
+        cloud_type=$(get_cloud_type "$cloud_choice")
+        if [ -n "$cloud_type" ]; then
+            break
+        else
+            echo -e "${RED}无效选择，请输入 1-13 之间的数字${NC}"
+        fi
+    done
     
     # 获取默认远程名称
     default_remote_name=$(get_default_remote_name "$cloud_choice")
@@ -308,13 +328,24 @@ main_menu() {
         exit 1
     fi
     
-    read -p "请输入挂载目录 (例如: /mnt/cloudrive): " mount_point
+    read -p "请输入挂载目录 [默认: /mnt/${remote_name}]: " mount_point
+    mount_point=${mount_point:-/mnt/${remote_name}}
+    
     if [ -z "$mount_point" ]; then
         echo -e "${RED}挂载目录不能为空${NC}"
         exit 1
     fi
     
-    read -p "是否启用同步功能? (y/n): " enable_sync
+    # 询问是否启用同步
+    while true; do
+        read -p "是否启用定时同步功能? (y/n) [默认: n]: " enable_sync
+        enable_sync=${enable_sync:-n}
+        if [[ "$enable_sync" =~ ^[yYnN]$ ]]; then
+            break
+        else
+            echo -e "${RED}请输入 y 或 n${NC}"
+        fi
+    done
     
     sync_enabled=false
     sync_dir=""
@@ -322,29 +353,40 @@ main_menu() {
     
     if [[ "$enable_sync" == "y" || "$enable_sync" == "Y" ]]; then
         sync_enabled=true
-        read -p "请输入本地同步目录 (例如: /data/sync): " sync_dir
+        read -p "请输入本地同步目录 [默认: /data/${remote_name}]: " sync_dir
+        sync_dir=${sync_dir:-/data/${remote_name}}
+        
         if [ -z "$sync_dir" ]; then
             echo -e "${RED}同步目录不能为空${NC}"
             exit 1
         fi
         
-        echo -e "\n同步间隔选项:"
+        echo -e "\n${BLUE}同步间隔选项:${NC}"
         echo "  1. 每小时"
-        echo "  2. 每6小时"
+        echo "  2. 每6小时 (推荐)"
         echo "  3. 每12小时"
         echo "  4. 每天"
-        read -p "请选择同步间隔 (1-4): " interval_choice
         
-        case $interval_choice in
-            1) sync_interval="1h" ;;
-            2) sync_interval="6h" ;;
-            3) sync_interval="12h" ;;
-            4) sync_interval="24h" ;;
-            *) sync_interval="6h" ;;
-        esac
+        while true; do
+            read -p "请选择同步间隔 (1-4) [默认: 2]: " interval_choice
+            interval_choice=${interval_choice:-2}
+            
+            case $interval_choice in
+                1) sync_interval="1h"; break ;;
+                2) sync_interval="6h"; break ;;
+                3) sync_interval="12h"; break ;;
+                4) sync_interval="24h"; break ;;
+                *) echo -e "${RED}请输入 1-4 之间的数字${NC}" ;;
+            esac
+        done
         
         mkdir -p "$sync_dir"
+        echo -e "${GREEN}同步目录已创建: $sync_dir${NC}"
     fi
+    
+    echo -e "\n${YELLOW}========================================${NC}"
+    echo -e "${YELLOW}开始安装和配置...${NC}"
+    echo -e "${YELLOW}========================================${NC}\n"
     
     # 安装依赖
     install_rclone
@@ -352,7 +394,10 @@ main_menu() {
     create_directories
     
     # 配置 rclone
-    configure_rclone "$remote_name" "$cloud_type"
+    if ! configure_rclone "$remote_name" "$cloud_type"; then
+        echo -e "${RED}配置失败，退出${NC}"
+        exit 1
+    fi
     
     # 创建挂载服务
     create_mount_service "$remote_name" "$mount_point"
@@ -387,6 +432,7 @@ main_menu() {
     if [ "$sync_enabled" = true ]; then
         echo -e "  查看同步日志: ${YELLOW}tail -f /var/log/rclone/${remote_name}-sync.log${NC}"
     fi
+    echo ""
 }
 
 # 主程序

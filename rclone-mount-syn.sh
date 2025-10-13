@@ -33,8 +33,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# 配置文件路径
-RCLONE_CONFIG="/"
+# 配置文件路径 - 修复：使用正确的 rclone 配置文件路径
+RCLONE_CONFIG="$HOME/.config/rclone/rclone.conf"
 SCRIPT_DIR="/opt/rclone-manager"
 CONFIG_FILE="$SCRIPT_DIR/config.json"
 
@@ -76,6 +76,8 @@ install_dependencies() {
 create_directories() {
     mkdir -p "$SCRIPT_DIR"
     mkdir -p /var/log/rclone
+    # 确保 rclone 配置目录存在
+    mkdir -p "$(dirname "$RCLONE_CONFIG")"
 }
 
 # 显示云盘列表
@@ -150,11 +152,11 @@ configure_rclone() {
     echo ""
     
     # 检查是否已存在同名配置
-    if RCLONE_CONFIG="$RCLONE_CONFIG" rclone listremotes 2>/dev/null | grep -q "^${remote_name}:$"; then
+    if rclone listremotes 2>/dev/null | grep -q "^${remote_name}:$"; then
         echo -e "${YELLOW}警告: 远程名称 '${remote_name}' 已存在${NC}"
         read -p "是否删除并重新配置? (y/n): " overwrite
         if [[ "$overwrite" == "y" || "$overwrite" == "Y" ]]; then
-            RCLONE_CONFIG="$RCLONE_CONFIG" rclone config delete "$remote_name"
+            rclone config delete "$remote_name"
         else
             echo -e "${RED}已取消配置${NC}"
             return 1
@@ -162,7 +164,7 @@ configure_rclone() {
     fi
     
     # 使用交互式配置
-    RCLONE_CONFIG="$RCLONE_CONFIG" rclone config create "$remote_name" "$cloud_type"
+    rclone config create "$remote_name" "$cloud_type"
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}rclone 配置成功${NC}"
@@ -230,7 +232,7 @@ create_sync_service() {
     # 创建同步脚本
     cat > "$SCRIPT_DIR/sync-${remote_name}.sh" <<EOF
 #!/bin/bash
-RCLONE_CONFIG=${RCLONE_CONFIG}
+export RCLONE_CONFIG=${RCLONE_CONFIG}
 /usr/bin/rclone sync ${remote_name}: ${sync_dir} \\
     --config=${RCLONE_CONFIG} \\
     --transfers 4 \\
@@ -291,7 +293,8 @@ save_config() {
     "mount_point": "$mount_point",
     "sync_enabled": $sync_enabled,
     "sync_dir": "$sync_dir",
-    "sync_interval": "$sync_interval"
+    "sync_interval": "$sync_interval",
+    "rclone_config": "$RCLONE_CONFIG"
 }
 EOF
 }
@@ -300,7 +303,7 @@ EOF
 main_menu() {
     clear
     echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║     RClone 云盘管理脚本 v1.0          ║${NC}"
+    echo -e "${BLUE}║     RClone 云盘管理脚本 v1.1          ║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     echo ""
     
@@ -417,6 +420,7 @@ main_menu() {
     echo -e "  远程名称: ${YELLOW}$remote_name${NC}"
     echo -e "  云盘类型: ${YELLOW}$cloud_type${NC}"
     echo -e "  挂载目录: ${YELLOW}$mount_point${NC}"
+    echo -e "  配置文件: ${YELLOW}$RCLONE_CONFIG${NC}"
     if [ "$sync_enabled" = true ]; then
         echo -e "  同步目录: ${YELLOW}$sync_dir${NC}"
         echo -e "  同步间隔: ${YELLOW}$sync_interval${NC}"
@@ -432,6 +436,7 @@ main_menu() {
     if [ "$sync_enabled" = true ]; then
         echo -e "  查看同步日志: ${YELLOW}tail -f /var/log/rclone/${remote_name}-sync.log${NC}"
     fi
+    echo -e "  查看已配置的远程: ${YELLOW}rclone listremotes${NC}"
     echo ""
 }
 

@@ -23,16 +23,16 @@ fi
 # --- 1. 安装 rclone 和 fuse ---
 echo -e "${GREEN}--- 1. 正在安装/更新 rclone 和 fuse ---${NC}"
 if command -v apt &> /dev/null; then
-    apt update && apt install -y rclone fuse unzip curl
-elif command -v yum &> /dev/null; null; then
-    yum install -y rclone fuse unzip curl
+    apt update && apt install -y rclone fuse unzip curl expect
+elif command -v yum &> /dev/null; then
+    yum install -y rclone fuse unzip curl expect
 elif command -v dnf &> /dev/null; then
-    dnf install -y rclone fuse unzip curl
+    dnf install -y rclone fuse unzip curl expect
 else
-    echo -e "${RED}不支持的包管理器。请手动安装 rclone 和 fuse。${NC}"
+    echo -e "${RED}不支持的包管理器。请手动安装 rclone、fuse 和 expect。${NC}"
     exit 1
 fi
-echo -e "${GREEN}rclone 和 fuse 安装完成。${NC}"
+echo -e "${GREEN}rclone, fuse 和 expect 安装完成。${NC}"
 echo ""
 
 # 检查 rclone 是否安装成功
@@ -48,23 +48,23 @@ chmod 600 "$RCLONE_CONFIG_PATH" # 设置文件权限，只有所有者可读写
 # --- 2. 选择云盘进行配置 ---
 declare -A CLOUD_DRIVES
 CLOUD_DRIVES=(
-    [1]="Google Drive"
-    [2]="OneDrive"
-    [3]="Dropbox"
-    [4]="Amazon S3 / S3 compatible"
-    [5]="Google Cloud Storage (GCS)"
-    [6]="Amazon Drive"
-    [7]="Mega"
-    [8]="pCloud"
-    [9]="Box"
-    [10]="SFTP / FTP / WebDAV (通用)"
-    [11]="Baidu Netdisk (百度网盘)"
-    [12]="Aliyun Drive (阿里云盘)"
-    [13]="Quark Cloud Drive (夸克网盘)"
-    [14]="China Telecom Cloud (天翼云盘)"
-    [15]="China Mobile Cloud (和彩云/移动云盘)"
-    [16]="Tencent COS (腾讯云对象存储)"
-    [17]="Alibaba OSS (阿里云对象存储)"
+    [1]="Google Drive (drive)"
+    [2]="OneDrive (onedrive)"
+    [3]="Dropbox (dropbox)"
+    [4]="Amazon S3 / S3 compatible (s3)"
+    [5]="Google Cloud Storage (GCS) (gcs)"
+    [6]="Amazon Drive (amazon cloud drive)"
+    [7]="Mega (mega)"
+    [8]="pCloud (pcloud)"
+    [9]="Box (box)"
+    [10]="SFTP / FTP / WebDAV (通用) (sftp/ftp/webdav)"
+    [11]="Baidu Netdisk (百度网盘) (baidu)"
+    [12]="Aliyun Drive (阿里云盘) (aliyundrive)"
+    [13]="Quark Cloud Drive (夸克网盘) (quark)"
+    [14]="China Telecom Cloud (天翼云盘) (chunghwadrive)"
+    [15]="China Mobile Cloud (和彩云/移动云盘) (cmcccloud)" # 这是一个推测值，可能需要根据实际rclone类型列表调整
+    [16]="Tencent COS (腾讯云对象存储) (cos)"
+    [17]="Alibaba OSS (阿里云对象存储) (oss)"
 )
 
 echo -e "${GREEN}--- 2. 请选择需要配置的云盘 (可多选，输入序号，例如 1 2 11): ---${NC}"
@@ -72,18 +72,28 @@ for key in $(seq 1 ${#CLOUD_DRIVES[@]}); do
     echo -e "${YELLOW}  $key) ${CLOUD_DRIVES[$key]}${NC}"
 done
 
-read -p "您的选择 (例如: 1 11 12): " selected_options
+read -p "您的选择 (例如: 1 11 12，不输入则退出): " selected_options
 echo ""
+
+# 如果用户未输入任何内容，则退出
+if [ -z "$selected_options" ]; then
+    echo -e "${RED}未选择任何云盘，脚本退出。${NC}"
+    exit 0
+fi
 
 declare -A configured_remotes # 存储已配置的远程名称和挂载点
 
 # 配置选定的云盘
 for opt in $selected_options; do
-    cloud_name="${CLOUD_DRIVES[$opt]}"
-    if [[ -z "$cloud_name" ]]; then
+    cloud_info="${CLOUD_DRIVES[$opt]}"
+    if [[ -z "$cloud_info" ]]; then
         echo -e "${RED}无效的选择: $opt，跳过。${NC}"
         continue
     fi
+    
+    # 从云盘信息中解析出显示名称和 rclone 类型提示 (括号内部分)
+    cloud_name=$(echo "$cloud_info" | sed -E 's/\s*\((.*)\)//')
+    rclone_type_hint=$(echo "$cloud_info" | sed -E 's/.*\(//;s/\)//')
 
     echo -e "${YELLOW}--- 正在配置 ${cloud_name} ---${NC}"
     
@@ -92,66 +102,71 @@ for opt in $selected_options; do
     read -p "请输入此云盘的远程名称 (例如 baiduyun, 默认: $default_remote_name): " remote_name
     remote_name="${remote_name:-$default_remote_name}"
 
-    # 调用 rclone config 进行配置，将配置文件路径传递给它
     echo -e "${YELLOW}即将开始 rclone config 交互式配置。请注意在本地浏览器中授权！${NC}"
-    # 使用 expect 自动化大部分 yes/no 提示，回车默认为 yes
+    echo -e "${YELLOW}当提示输入 'Storage' 类型时，您可以输入 '$rclone_type_hint' 或根据列表选择数字。${NC}"
+    echo -e "${YELLOW}大多数 'yes/no' 提示会尝试自动回车确认。${NC}"
+
+    # 使用 expect 自动化 rclone config 内部的 yes/no 提示
+    # 注意: expect 无法完全替代人工输入，尤其是在需要粘贴 token 或选择数字类型时。
     expect -c "
         set timeout -1
         spawn rclone config --config=$RCLONE_CONFIG_PATH
-        expect \"No remotes found, make a new one?\"
-        send \"n\r\"
-        expect \"name\"
-        send \"$remote_name\r\"
-        expect \"Storage\"
-        # 根据云盘名称自动选择类型，这里需要根据实际情况手动输入
-        # 脚本无法完全自动化选择类型，用户需要根据提示输入数字
-        # 对于常见云盘，这里可以提供一些提示
-        if { \"$cloud_name\" == \"Google Drive\" } {
-            send \"drive\r\"
-        } elseif { \"$cloud_name\" == \"OneDrive\" } {
-            send \"onedrive\r\"
-        } elseif { \"$cloud_name\" == \"Baidu Netdisk (百度网盘)\" } {
-            send \"baidu\r\"
-        } elseif { \"$cloud_name\" == \"Aliyun Drive (阿里云盘)\" } {
-            send \"aliyundrive\r\"
-        } elseif { \"$cloud_name\" == \"Quark Cloud Drive (夸克网盘)\" } {
-            send \"quark\r\"
-        } elseif { \"$cloud_name\" == \"China Telecom Cloud (天翼云盘)\" } {
-            # 天翼可能对应 'chunghwadrive' 或 'cloudreve'，这里先用 chunghwadrive 尝试
-            send \"chunghwadrive\r\" 
-        } elseif { \"$cloud_name\" == \"China Mobile Cloud (和彩云/移动云盘)\" } {
-             # 和彩云可能对应 'cmcccloud' 或类似名称，需要用户确认
-            send \"cmcccloud\r\"
-        } elseif { \"$cloud_name\" == \"Dropbox\" } {
-            send \"dropbox\r\"
-        } elseif { \"$cloud_name\" == \"Mega\" } {
-            send \"mega\r\"
-        } elseif { \"$cloud_name\" == \"pCloud\" } {
-            send \"pcloud\r\"
-        } else {
-            # 对于其他云盘，用户需要手动输入类型数字
-            # 例如 Amazon S3 是 s3, SFTP 是 sftp 等
-            # 这个expect脚本在此处将暂停，等待用户输入。
+        # 如果是第一个远程，会提示创建新的，否则会显示菜单
+        expect {
+            \"No remotes found, make a new one?\" {
+                send \"n\\r\"
+                expect \"name\"
+                send \"$remote_name\\r\"
+            }
+            \"e) Exit\" {
+                send \"n\\r\"
+                expect \"name\"
+                send \"$remote_name\\r\"
+            }
+        }
+        
+        # 匹配 Storage 提示，这里用户需要手动输入类型或数字
+        # 如果用户输入的类型提示是明确的，可以尝试自动输入，但存在风险
+        # 更好的做法是提示用户手动输入
+        expect \"Storage\" {
+             # 这里可以尝试发送 rclone_type_hint，但如果类型不是精确匹配，会失败
+             # 确保在云盘列表中的类型提示与 rclone config 内部的实际类型字符串匹配
+             send \"$rclone_type_hint\\r\"
         }
 
-        # 自动化处理常见的默认选项，回车即是 YES
-        expect -re \"(client_id|client_secret|scope|token_url|auth_url|provider|advanced config|auto config|Team Drive|server_side_encryption|region|endpoint|access_key_id|secret_access_key|Yes this is OK)\" {
-            send -- \"\r\"
-            exp_continue
+        # 尝试自动化处理常见的默认选项，回车即是 YES
+        # 这个循环会尝试匹配各种常见的 rclone config 提示并发送回车
+        # 它会在遇到无法自动处理的（例如需要粘贴 token 或明确选择）时暂停
+        while {1} {
+            expect {
+                -re \"(client_id|client_secret|scope|token_url|auth_url|provider|advanced config|auto config|Team Drive|server_side_encryption|region|endpoint|access_key_id|secret_access_key|Yes this is OK|root_folder_id|config:)\" {
+                    send -- \"\\r\"
+                }
+                # 如果遇到需要用户粘贴token的提示，interact 会将控制权交给用户
+                -re \"(rclone-token|code|Enter a value for.*:|Enter an existing remote.*:|Enter an Id for.*:)\" {
+                    interact
+                }
+                # 匹配到 rclone config 的主菜单，表示一个远程配置完成
+                \"e) Exit\" {
+                    send \"q\\r\" # 退出 rclone config 菜单
+                    break
+                }
+                # 如果超时或者遇到其他情况，也退出循环
+                timeout {
+                    puts \"Timeout reached, exiting expect script. Manual interaction may be needed.\"
+                    break
+                }
+                eof {
+                    puts \"EOF reached, exiting expect script.\"
+                    break
+                }
+            }
         }
-        # 如果遇到需要用户粘贴token的提示，expect不会处理，会暂停等待
-        # 例如 rclone-token 或者 code
-        expect \"(rclone-token|code)\" {
-            interact
-        }
-        expect eof
     "
-    # 由于expect的局限性，特别是在需要用户粘贴token的地方，
-    # rclone config 可能会在expect脚本内部暂停，用户需要手动粘贴token。
     # 确认配置完成
-    read -p "${YELLOW}请确保 ${remote_name} 已成功配置。按 Enter 继续...${NC}"
+    read -p "${YELLOW}请确保 ${remote_name} 已成功配置 (检查 '/rclone.conf' 文件)。按 Enter 继续...${NC}"
 
-    read -p "请输入 ${remote_name} 的挂载目录 (例如: /mnt/${remote_name}): " mount_point
+    read -p "请输入 ${remote_name} 的挂载目录 (例如: /mnt/${remote_name}, 默认: /mnt/${remote_name}): " mount_point
     mount_point="${mount_point:-/mnt/$remote_name}" # 默认挂载到 /mnt/远程名称
 
     configured_remotes["$remote_name"]="$mount_point"
@@ -215,19 +230,19 @@ EOF
 done
 
 # --- 4. 配置同步功能 (可选) ---
-read -p "${YELLOW}是否需要配置同步功能？ (将挂载的目录同步到本地文件夹，以便离线使用) [y/N]: ${NC}" sync_choice
-sync_choice=$(echo "$sync_choice" | tr '[:upper:]' '[:lower:]')
+read -p "${YELLOW}是否需要配置同步功能？ (将挂载的目录同步到本地文件夹，以便离线使用) [Y/n]: ${NC}" sync_choice
+sync_choice=$(echo "${sync_choice:-Y}" | tr '[:upper:]' '[:lower:]') # 默认 Y
 
-if [[ "$sync_choice" == "y" || "$sync_choice" == "" ]]; then
+if [[ "$sync_choice" == "y" ]]; then
     echo -e "${GREEN}--- 4. 配置同步功能 ---${NC}"
     for remote_name in "${!configured_remotes[@]}"; do
         mount_point="${configured_remotes[$remote_name]}"
 
-        read -p "${YELLOW}是否同步远程 ${remote_name} (${mount_point}) 的内容到本地？ [y/N]: ${NC}" individual_sync_choice
-        individual_sync_choice=$(echo "$individual_sync_choice" | tr '[:upper:]' '[:lower:]')
+        read -p "${YELLOW}是否同步远程 ${remote_name} (${mount_point}) 的内容到本地？ [Y/n]: ${NC}" individual_sync_choice
+        individual_sync_choice=$(echo "${individual_sync_choice:-Y}" | tr '[:upper:]' '[:lower:]') # 默认 Y
 
-        if [[ "$individual_sync_choice" == "y" || "$individual_sync_choice" == "" ]]; then
-            read -p "请输入本地同步目录的路径 (例如: /data/offline_${remote_name}): " local_sync_dir
+        if [[ "$individual_sync_choice" == "y" ]]; then
+            read -p "请输入本地同步目录的路径 (例如: /data/offline_${remote_name}, 默认: /data/offline_${remote_name}): " local_sync_dir
             local_sync_dir="${local_sync_dir:-/data/offline_${remote_name}}"
             
             mkdir -p "$local_sync_dir"
@@ -264,7 +279,8 @@ EOF
             chmod +x "$SYNC_SCRIPT"
 
             # 创建 Crontab 定时任务
-            read -p "${YELLOW}请输入同步频率 (分钟，例如 60 表示每小时同步一次，0 表示手动同步): ${NC}" sync_interval
+            read -p "${YELLOW}请输入同步频率 (分钟，例如 60 表示每小时同步一次，输入 0 表示手动同步，默认 60): ${NC}" sync_interval
+            sync_interval="${sync_interval:-60}" # 默认 60 分钟
             if [[ "$sync_interval" =~ ^[0-9]+$ ]] && [ "$sync_interval" -gt 0 ]; then
                 (crontab -l 2>/dev/null; echo "*/$sync_interval * * * * $SYNC_SCRIPT") | crontab -
                 echo -e "${GREEN}已设置 ${remote_name} 每 ${sync_interval} 分钟同步一次到 ${local_sync_dir}。${NC}"
@@ -283,3 +299,4 @@ fi
 echo -e "${GREEN}--- 所有配置完成！---${NC}"
 echo "您现在可以使用 'df -h' 查看挂载的云盘，并使用 'ls -l /mnt/' 查看内容。"
 echo "如果遇到问题，请检查相应的 rclone 服务日志 ('/var/log/rclone-*.log') 和同步日志 ('/var/log/rclone_sync_*.log')。"
+echo "rclone 配置文件位于: ${RCLONE_CONFIG_PATH}"

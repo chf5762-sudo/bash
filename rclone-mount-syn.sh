@@ -1,9 +1,29 @@
 #!/bin/bash
 
-# Rclone 云盘自动配置脚本
-# 支持多种云盘的挂载和同步功能
+# rclone 云盘管理脚本
+# 功能：交互式配置、自动挂载、定时同步
 
 set -e
+
+#=============================================================================
+# 默认远程名称配置表
+#=============================================================================
+# 云盘编号 | 云盘名称              | 默认远程名称    | rclone类型
+#----------|-----------------------|----------------|------------
+# 1        | Google Drive          | googledrive    | drive
+# 2        | OneDrive              | onedrive       | onedrive
+# 3        | Dropbox               | dropbox        | dropbox
+# 4        | SFTP                  | sftp           | sftp
+# 5        | FTP                   | ftp            | ftp
+# 6        | WebDAV                | webdav         | webdav
+# 7        | 百度网盘              | baiduyun       | baidu
+# 8        | 阿里云盘              | aliyun         | aliyun
+# 9        | 夸克网盘              | quark          | quark
+# 10       | 天翼云盘              | tianyi         | 189
+# 11       | 和彩云                | hecaiyun       | chinamobile
+# 12       | 腾讯云COS             | tencentcos     | cos
+# 13       | 阿里云OSS             | aliyunoss      | oss
+#=============================================================================
 
 # 颜色定义
 RED='\033[0;31m'
@@ -14,457 +34,361 @@ NC='\033[0m' # No Color
 
 # 配置文件路径
 RCLONE_CONFIG="/"
-LOG_DIR="/var/log/rclone"
+SCRIPT_DIR="/opt/rclone-manager"
+CONFIG_FILE="$SCRIPT_DIR/config.json"
 
-# 打印带颜色的消息
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-print_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 检查是否为root用户
+# 检查是否为 root 用户
 check_root() {
     if [[ $EUID -ne 0 ]]; then
-        print_error "此脚本必须以root权限运行"
+        echo -e "${RED}错误: 此脚本必须以 root 权限运行${NC}"
         exit 1
     fi
+}
+
+# 安装 rclone
+install_rclone() {
+    if command -v rclone &> /dev/null; then
+        echo -e "${GREEN}rclone 已安装${NC}"
+        return
+    fi
+    
+    echo -e "${YELLOW}正在安装 rclone...${NC}"
+    curl https://rclone.org/install.sh | bash
+    echo -e "${GREEN}rclone 安装完成${NC}"
 }
 
 # 安装依赖
 install_dependencies() {
-    print_info "检查并安装依赖..."
-    
-    if command -v apt &> /dev/null; then
-        apt update
-        apt install -y curl fuse wget unzip
+    echo -e "${YELLOW}正在安装依赖...${NC}"
+    if command -v apt-get &> /dev/null; then
+        apt-get update
+        apt-get install -y fuse jq curl
     elif command -v yum &> /dev/null; then
-        yum install -y curl fuse wget unzip
-    elif command -v dnf &> /dev/null; then
-        dnf install -y curl fuse wget unzip
+        yum install -y fuse jq curl
     else
-        print_error "不支持的包管理器"
+        echo -e "${RED}不支持的系统，请手动安装 fuse 和 jq${NC}"
         exit 1
     fi
-    
-    print_success "依赖安装完成"
 }
 
-# 安装Rclone
-install_rclone() {
-    if command -v rclone &> /dev/null; then
-        print_warning "Rclone 已安装，版本: $(rclone version | head -n1)"
-        read -p "是否重新安装? (y/n): " reinstall
-        if [[ ! $reinstall =~ ^[Yy]$ ]]; then
-            return
-        fi
-    fi
-    
-    print_info "开始安装 Rclone..."
-    curl https://rclone.org/install.sh | bash
-    print_success "Rclone 安装完成"
+# 创建脚本目录
+create_directories() {
+    mkdir -p "$SCRIPT_DIR"
+    mkdir -p /var/log/rclone
 }
 
-# 显示云盘选择菜单
-show_cloud_menu() {
-    clear
-    echo "=========================================="
-    echo "          选择云盘类型"
-    echo "=========================================="
-    echo ""
+# 显示云盘列表
+show_cloud_list() {
+    echo -e "\n${BLUE}========== 支持的云盘列表 ==========${NC}"
     echo "国际云盘:"
-    echo "  1) Google Drive (谷歌云端硬盘)"
-    echo "  2) OneDrive (微软云盘)"
-    echo "  3) Dropbox"
-    echo "  4) SFTP"
-    echo "  5) WebDAV"
+    echo "  1. Google Drive (谷歌云端硬盘)"
+    echo "  2. OneDrive (微软云盘)"
+    echo "  3. Dropbox"
+    echo "  4. SFTP"
+    echo "  5. FTP"
+    echo "  6. WebDAV"
     echo ""
     echo "中国云盘:"
-    echo "  6) Baidu Netdisk (百度网盘)"
-    echo "  7) Aliyun Drive (阿里云盘)"
-    echo "  8) Quark Cloud Drive (夸克网盘)"
-    echo "  9) China Telecom Cloud (天翼云盘)"
-    echo " 10) China Mobile Cloud (和彩云)"
-    echo " 11) Tencent COS (腾讯云对象存储)"
-    echo " 12) Alibaba OSS (阿里云对象存储)"
-    echo ""
-    echo "  0) 退出"
-    echo "=========================================="
+    echo "  7. Baidu Netdisk (百度网盘)"
+    echo "  8. Aliyun Drive (阿里云盘)"
+    echo "  9. Quark Cloud Drive (夸克网盘)"
+    echo " 10. China Telecom Cloud (天翼云盘)"
+    echo " 11. China Mobile Cloud (和彩云)"
+    echo " 12. Tencent COS (腾讯云对象存储)"
+    echo " 13. Alibaba OSS (阿里云对象存储)"
+    echo -e "${BLUE}====================================${NC}\n"
 }
 
-# 获取云盘类型代码
+# 获取云盘类型
 get_cloud_type() {
     case $1 in
         1) echo "drive" ;;
         2) echo "onedrive" ;;
         3) echo "dropbox" ;;
         4) echo "sftp" ;;
-        5) echo "webdav" ;;
-        6) echo "baidunetdisk" ;;
-        7) echo "aliyundrive" ;;
-        8) echo "quark" ;;
-        9) echo "ctcloud" ;;
-        10) echo "chinamobile" ;;
-        11) echo "tencentcos" ;;
-        12) echo "oss" ;;
+        5) echo "ftp" ;;
+        6) echo "webdav" ;;
+        7) echo "baidu" ;;
+        8) echo "aliyun" ;;
+        9) echo "quark" ;;
+        10) echo "189" ;;
+        11) echo "chinamobile" ;;
+        12) echo "cos" ;;
+        13) echo "oss" ;;
         *) echo "" ;;
     esac
 }
 
-# 获取云盘名称
-get_cloud_name() {
+# 获取默认远程名称
+get_default_remote_name() {
     case $1 in
-        1) echo "Google Drive" ;;
-        2) echo "OneDrive" ;;
-        3) echo "Dropbox" ;;
-        4) echo "SFTP" ;;
-        5) echo "WebDAV" ;;
-        6) echo "百度网盘" ;;
-        7) echo "阿里云盘" ;;
-        8) echo "夸克网盘" ;;
-        9) echo "天翼云盘" ;;
-        10) echo "和彩云" ;;
-        11) echo "腾讯云COS" ;;
-        12) echo "阿里云OSS" ;;
-        *) echo "未知" ;;
+        1) echo "googledrive" ;;
+        2) echo "onedrive" ;;
+        3) echo "dropbox" ;;
+        4) echo "sftp" ;;
+        5) echo "ftp" ;;
+        6) echo "webdav" ;;
+        7) echo "baiduyun" ;;
+        8) echo "aliyun" ;;
+        9) echo "quark" ;;
+        10) echo "tianyi" ;;
+        11) echo "hecaiyun" ;;
+        12) echo "tencentcos" ;;
+        13) echo "aliyunoss" ;;
+        *) echo "mycloud" ;;
     esac
 }
 
-# 配置云盘
-configure_cloud() {
-    show_cloud_menu
-    read -p "请选择云盘类型 (0-12): " choice
+# 配置 rclone
+configure_rclone() {
+    local remote_name=$1
+    local cloud_type=$2
     
-    if [[ $choice == "0" ]]; then
-        print_info "退出配置"
-        exit 0
-    fi
+    echo -e "${YELLOW}正在配置 rclone...${NC}"
+    echo -e "${BLUE}请按照提示完成 OAuth 认证或输入相关信息${NC}"
     
-    cloud_type=$(get_cloud_type $choice)
-    cloud_name=$(get_cloud_name $choice)
+    RCLONE_CONFIG="$RCLONE_CONFIG" rclone config create "$remote_name" "$cloud_type" --non-interactive=false
     
-    if [[ -z $cloud_type ]]; then
-        print_error "无效的选择"
-        exit 1
-    fi
-    
-    print_info "开始配置: $cloud_name"
-    
-    read -p "请输入配置名称 (例如: mypan): " remote_name
-    
-    # 设置配置文件路径
-    export RCLONE_CONFIG=$RCLONE_CONFIG
-    
-    print_warning "即将进入 Rclone 配置界面..."
-    print_info "请按以下步骤操作:"
-    echo "  1. 输入 'n' 创建新配置"
-    echo "  2. 输入配置名称: $remote_name"
-    echo "  3. 选择存储类型: $cloud_type"
-    echo "  4. 按提示完成后续配置"
-    echo ""
-    read -p "按回车键继续..."
-    
-    rclone config
-    
-    # 验证配置
-    if rclone listremotes | grep -q "^${remote_name}:$"; then
-        print_success "云盘配置成功: $remote_name"
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}rclone 配置成功${NC}"
     else
-        print_error "配置失败或未找到配置: $remote_name"
+        echo -e "${RED}rclone 配置失败${NC}"
         exit 1
     fi
 }
 
-# 配置挂载目录
-configure_mount() {
-    echo ""
-    print_info "配置挂载目录"
+# 创建挂载服务
+create_mount_service() {
+    local remote_name=$1
+    local mount_point=$2
+    local service_name="rclone-mount-${remote_name}"
     
-    read -p "请输入挂载目录路径 (默认: /mnt/$remote_name): " mount_dir
-    mount_dir=${mount_dir:-/mnt/$remote_name}
-    
-    # 创建挂载目录
-    mkdir -p "$mount_dir"
-    print_success "挂载目录创建: $mount_dir"
-    
-    # 询问远程路径
-    read -p "请输入云盘远程路径 (默认: /，即根目录): " remote_path
-    remote_path=${remote_path:-/}
-}
-
-# 配置同步功能
-configure_sync() {
-    echo ""
-    read -p "是否启用同步功能? (y/n): " enable_sync
-    
-    if [[ ! $enable_sync =~ ^[Yy]$ ]]; then
-        sync_enabled=false
-        return
-    fi
-    
-    sync_enabled=true
-    
-    read -p "请输入本地同步目录 (例如: /data/sync): " sync_dir
-    
-    if [[ -z $sync_dir ]]; then
-        print_error "同步目录不能为空"
-        exit 1
-    fi
-    
-    # 创建同步目录
-    mkdir -p "$sync_dir"
-    print_success "同步目录创建: $sync_dir"
-    
-    # 配置定时同步
-    echo ""
-    print_info "配置定时同步"
-    echo "  1) 每小时同步一次"
-    echo "  2) 每6小时同步一次"
-    echo "  3) 每天同步一次 (凌晨2点)"
-    echo "  4) 每周同步一次 (周日凌晨2点)"
-    echo "  5) 自定义cron表达式"
-    echo "  6) 不设置定时同步"
-    
-    read -p "请选择定时方式 (1-6): " sync_schedule
-    
-    case $sync_schedule in
-        1) cron_expression="0 * * * *" ;;
-        2) cron_expression="0 */6 * * *" ;;
-        3) cron_expression="0 2 * * *" ;;
-        4) cron_expression="0 2 * * 0" ;;
-        5)
-            read -p "请输入cron表达式: " cron_expression
-            ;;
-        6)
-            cron_expression=""
-            print_info "跳过定时同步设置"
-            ;;
-        *)
-            print_warning "无效选择，使用默认值: 每天凌晨2点"
-            cron_expression="0 2 * * *"
-            ;;
-    esac
-}
-
-# 创建systemd服务
-create_systemd_service() {
-    print_info "创建 systemd 挂载服务..."
-    
-    # 创建日志目录
-    mkdir -p "$LOG_DIR"
-    
-    # 创建挂载服务
-    cat > "/etc/systemd/system/rclone-${remote_name}.service" <<EOF
+    cat > "/etc/systemd/system/${service_name}.service" <<EOF
 [Unit]
-Description=Rclone Mount Service for ${remote_name}
+Description=RClone Mount Service for ${remote_name}
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=notify
+User=root
+Group=root
 Environment=RCLONE_CONFIG=${RCLONE_CONFIG}
-ExecStartPre=/bin/mkdir -p ${mount_dir}
-ExecStart=/usr/bin/rclone mount ${remote_name}:${remote_path} ${mount_dir} \\
+ExecStartPre=/bin/mkdir -p ${mount_point}
+ExecStart=/usr/bin/rclone mount ${remote_name}: ${mount_point} \\
     --config=${RCLONE_CONFIG} \\
     --allow-other \\
-    --allow-non-empty \\
     --vfs-cache-mode writes \\
-    --vfs-cache-max-size 10G \\
     --vfs-cache-max-age 24h \\
-    --buffer-size 32M \\
-    --dir-cache-time 12h \\
-    --poll-interval 15s \\
-    --umask 000 \\
-    --log-level INFO \\
-    --log-file=${LOG_DIR}/${remote_name}-mount.log
-ExecStop=/bin/fusermount -uz ${mount_dir}
+    --vfs-read-chunk-size 128M \\
+    --vfs-read-chunk-size-limit off \\
+    --buffer-size 512M \\
+    --transfers 4 \\
+    --checkers 8 \\
+    --low-level-retries 10 \\
+    --log-file=/var/log/rclone/${remote_name}-mount.log \\
+    --log-level INFO
+ExecStop=/bin/fusermount -uz ${mount_point}
 Restart=on-failure
 RestartSec=10
-User=root
 
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    systemctl daemon-reload
+    systemctl enable "${service_name}.service"
+    systemctl start "${service_name}.service"
     
-    print_success "挂载服务创建成功: rclone-${remote_name}.service"
+    echo -e "${GREEN}挂载服务 ${service_name} 已创建并启动${NC}"
 }
 
-# 创建同步服务和定时器
+# 创建同步服务
 create_sync_service() {
-    if [[ $sync_enabled != true ]]; then
-        return
-    fi
+    local remote_name=$1
+    local mount_point=$2
+    local sync_dir=$3
+    local sync_interval=$4
+    local service_name="rclone-sync-${remote_name}"
     
-    print_info "创建 systemd 同步服务..."
-    
-    # 创建同步服务
-    cat > "/etc/systemd/system/rclone-sync-${remote_name}.service" <<EOF
-[Unit]
-Description=Rclone Sync Service for ${remote_name}
-After=network-online.target rclone-${remote_name}.service
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-Environment=RCLONE_CONFIG=${RCLONE_CONFIG}
-ExecStart=/usr/bin/rclone sync ${remote_name}:${remote_path} ${sync_dir} \\
+    # 创建同步脚本
+    cat > "$SCRIPT_DIR/sync-${remote_name}.sh" <<EOF
+#!/bin/bash
+RCLONE_CONFIG=${RCLONE_CONFIG}
+/usr/bin/rclone sync ${remote_name}: ${sync_dir} \\
     --config=${RCLONE_CONFIG} \\
     --transfers 4 \\
     --checkers 8 \\
-    --log-level INFO \\
-    --log-file=${LOG_DIR}/${remote_name}-sync.log \\
-    --stats 10s \\
-    --stats-one-line
+    --log-file=/var/log/rclone/${remote_name}-sync.log \\
+    --log-level INFO
+EOF
+    
+    chmod +x "$SCRIPT_DIR/sync-${remote_name}.sh"
+    
+    # 创建 systemd service
+    cat > "/etc/systemd/system/${service_name}.service" <<EOF
+[Unit]
+Description=RClone Sync Service for ${remote_name}
+After=network-online.target
+
+[Service]
+Type=oneshot
 User=root
+Group=root
+ExecStart=$SCRIPT_DIR/sync-${remote_name}.sh
 EOF
-    
-    print_success "同步服务创建成功: rclone-sync-${remote_name}.service"
-    
-    # 如果设置了定时同步，创建定时器
-    if [[ -n $cron_expression ]]; then
-        # 转换cron为systemd timer
-        create_systemd_timer
-    fi
-    
-    # 创建手动同步脚本
-    cat > "/usr/local/bin/rclone-sync-${remote_name}.sh" <<EOF
-#!/bin/bash
-systemctl start rclone-sync-${remote_name}.service
-systemctl status rclone-sync-${remote_name}.service
+
+    # 创建 systemd timer
+    cat > "/etc/systemd/system/${service_name}.timer" <<EOF
+[Unit]
+Description=RClone Sync Timer for ${remote_name}
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=${sync_interval}
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 EOF
-    
-    chmod +x "/usr/local/bin/rclone-sync-${remote_name}.sh"
-    print_success "手动同步脚本创建: /usr/local/bin/rclone-sync-${remote_name}.sh"
-}
 
-# 创建systemd定时器或crontab
-create_systemd_timer() {
-    if [[ -z $cron_expression ]]; then
-        return
-    fi
-    
-    print_info "设置定时同步..."
-    
-    # 添加到crontab
-    cron_cmd="$cron_expression /usr/bin/systemctl start rclone-sync-${remote_name}.service >> ${LOG_DIR}/${remote_name}-cron.log 2>&1"
-    
-    # 检查是否已存在
-    if crontab -l 2>/dev/null | grep -q "rclone-sync-${remote_name}"; then
-        print_warning "定时任务已存在，跳过添加"
-    else
-        (crontab -l 2>/dev/null; echo "$cron_cmd") | crontab -
-        print_success "定时同步已设置"
-    fi
-}
-
-# 启动服务
-start_services() {
-    print_info "启动服务..."
-    
     systemctl daemon-reload
+    systemctl enable "${service_name}.timer"
+    systemctl start "${service_name}.timer"
     
-    # 启动挂载服务
-    systemctl enable "rclone-${remote_name}.service"
-    systemctl start "rclone-${remote_name}.service"
+    echo -e "${GREEN}同步服务 ${service_name} 已创建并启动 (间隔: ${sync_interval})${NC}"
+}
+
+# 保存配置
+save_config() {
+    local remote_name=$1
+    local cloud_type=$2
+    local mount_point=$3
+    local sync_enabled=$4
+    local sync_dir=$5
+    local sync_interval=$6
     
-    sleep 3
+    cat > "$CONFIG_FILE" <<EOF
+{
+    "remote_name": "$remote_name",
+    "cloud_type": "$cloud_type",
+    "mount_point": "$mount_point",
+    "sync_enabled": $sync_enabled,
+    "sync_dir": "$sync_dir",
+    "sync_interval": "$sync_interval"
+}
+EOF
+}
+
+# 主菜单
+main_menu() {
+    clear
+    echo -e "${BLUE}╔════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║     RClone 云盘管理脚本 v1.0          ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
     
-    if systemctl is-active --quiet "rclone-${remote_name}.service"; then
-        print_success "挂载服务启动成功"
-    else
-        print_error "挂载服务启动失败，请查看日志: journalctl -u rclone-${remote_name}.service"
+    show_cloud_list
+    
+    read -p "请选择云盘类型 (1-13): " cloud_choice
+    
+    cloud_type=$(get_cloud_type "$cloud_choice")
+    if [ -z "$cloud_type" ]; then
+        echo -e "${RED}无效选择${NC}"
         exit 1
     fi
     
-    # 如果启用了同步，启用同步服务
-    if [[ $sync_enabled == true ]]; then
-        systemctl enable "rclone-sync-${remote_name}.service"
-        print_success "同步服务已启用"
+    # 获取默认远程名称
+    default_remote_name=$(get_default_remote_name "$cloud_choice")
+    
+    read -p "请输入远程名称 [默认: $default_remote_name]: " remote_name
+    remote_name=${remote_name:-$default_remote_name}
+    
+    if [ -z "$remote_name" ]; then
+        echo -e "${RED}远程名称不能为空${NC}"
+        exit 1
+    fi
+    
+    read -p "请输入挂载目录 (例如: /mnt/cloudrive): " mount_point
+    if [ -z "$mount_point" ]; then
+        echo -e "${RED}挂载目录不能为空${NC}"
+        exit 1
+    fi
+    
+    read -p "是否启用同步功能? (y/n): " enable_sync
+    
+    sync_enabled=false
+    sync_dir=""
+    sync_interval=""
+    
+    if [[ "$enable_sync" == "y" || "$enable_sync" == "Y" ]]; then
+        sync_enabled=true
+        read -p "请输入本地同步目录 (例如: /data/sync): " sync_dir
+        if [ -z "$sync_dir" ]; then
+            echo -e "${RED}同步目录不能为空${NC}"
+            exit 1
+        fi
         
-        # 询问是否立即执行一次同步
-        read -p "是否立即执行一次同步? (y/n): " do_sync_now
-        if [[ $do_sync_now =~ ^[Yy]$ ]]; then
-            print_info "开始同步..."
-            systemctl start "rclone-sync-${remote_name}.service"
-            sleep 2
-            systemctl status "rclone-sync-${remote_name}.service" --no-pager
-        fi
-    fi
-}
-
-# 显示配置摘要
-show_summary() {
-    echo ""
-    echo "=========================================="
-    echo "          配置完成"
-    echo "=========================================="
-    echo ""
-    echo "云盘名称: $cloud_name"
-    echo "配置名称: $remote_name"
-    echo "挂载目录: $mount_dir"
-    echo "远程路径: $remote_path"
-    echo "配置文件: $RCLONE_CONFIG"
-    echo ""
-    
-    if [[ $sync_enabled == true ]]; then
-        echo "同步目录: $sync_dir"
-        if [[ -n $cron_expression ]]; then
-            echo "定时同步: $cron_expression"
-        fi
-        echo ""
+        echo -e "\n同步间隔选项:"
+        echo "  1. 每小时"
+        echo "  2. 每6小时"
+        echo "  3. 每12小时"
+        echo "  4. 每天"
+        read -p "请选择同步间隔 (1-4): " interval_choice
+        
+        case $interval_choice in
+            1) sync_interval="1h" ;;
+            2) sync_interval="6h" ;;
+            3) sync_interval="12h" ;;
+            4) sync_interval="24h" ;;
+            *) sync_interval="6h" ;;
+        esac
+        
+        mkdir -p "$sync_dir"
     fi
     
-    echo "常用命令:"
-    echo "  查看挂载状态: systemctl status rclone-${remote_name}"
-    echo "  查看挂载日志: tail -f ${LOG_DIR}/${remote_name}-mount.log"
-    echo "  重启挂载: systemctl restart rclone-${remote_name}"
-    echo "  停止挂载: systemctl stop rclone-${remote_name}"
-    echo ""
-    
-    if [[ $sync_enabled == true ]]; then
-        echo "  手动同步: /usr/local/bin/rclone-sync-${remote_name}.sh"
-        echo "  查看同步日志: tail -f ${LOG_DIR}/${remote_name}-sync.log"
-        echo "  查看定时任务: crontab -l | grep rclone-sync-${remote_name}"
-        echo ""
-    fi
-    
-    echo "  查看挂载点: df -h | grep $mount_dir"
-    echo "  列出文件: ls -lh $mount_dir"
-    echo ""
-    echo "=========================================="
-}
-
-# 主函数
-main() {
-    clear
-    echo "=========================================="
-    echo "    Rclone 云盘自动配置脚本"
-    echo "=========================================="
-    echo ""
-    
-    check_root
-    install_dependencies
+    # 安装依赖
     install_rclone
-    configure_cloud
-    configure_mount
-    configure_sync
-    create_systemd_service
-    create_sync_service
-    start_services
-    show_summary
+    install_dependencies
+    create_directories
     
-    print_success "所有配置完成！"
+    # 配置 rclone
+    configure_rclone "$remote_name" "$cloud_type"
+    
+    # 创建挂载服务
+    create_mount_service "$remote_name" "$mount_point"
+    
+    # 创建同步服务
+    if [ "$sync_enabled" = true ]; then
+        create_sync_service "$remote_name" "$mount_point" "$sync_dir" "$sync_interval"
+    fi
+    
+    # 保存配置
+    save_config "$remote_name" "$cloud_type" "$mount_point" "$sync_enabled" "$sync_dir" "$sync_interval"
+    
+    echo -e "\n${GREEN}╔════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║         配置完成！                     ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════╝${NC}"
+    echo -e "\n${BLUE}配置信息:${NC}"
+    echo -e "  远程名称: ${YELLOW}$remote_name${NC}"
+    echo -e "  云盘类型: ${YELLOW}$cloud_type${NC}"
+    echo -e "  挂载目录: ${YELLOW}$mount_point${NC}"
+    if [ "$sync_enabled" = true ]; then
+        echo -e "  同步目录: ${YELLOW}$sync_dir${NC}"
+        echo -e "  同步间隔: ${YELLOW}$sync_interval${NC}"
+    fi
+    
+    echo -e "\n${BLUE}常用命令:${NC}"
+    echo -e "  查看挂载状态: ${YELLOW}systemctl status rclone-mount-${remote_name}${NC}"
+    if [ "$sync_enabled" = true ]; then
+        echo -e "  查看同步状态: ${YELLOW}systemctl status rclone-sync-${remote_name}.timer${NC}"
+        echo -e "  手动执行同步: ${YELLOW}systemctl start rclone-sync-${remote_name}${NC}"
+    fi
+    echo -e "  查看挂载日志: ${YELLOW}tail -f /var/log/rclone/${remote_name}-mount.log${NC}"
+    if [ "$sync_enabled" = true ]; then
+        echo -e "  查看同步日志: ${YELLOW}tail -f /var/log/rclone/${remote_name}-sync.log${NC}"
+    fi
 }
 
-# 运行主函数
-main
+# 主程序
+check_root
+main_menu

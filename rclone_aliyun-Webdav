@@ -23,6 +23,26 @@ SYNC_LOCAL_DIR="/root/AliyunDisk"
 WEBDAV_PORT=8080
 WEBDAV_USER="admin"
 
+# 检测系统架构
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64)
+        ALIYUNPAN_ARCH="linux-amd64"
+        ;;
+    aarch64|arm64)
+        ALIYUNPAN_ARCH="linux-arm64"
+        ;;
+    armv7l)
+        ALIYUNPAN_ARCH="linux-arm"
+        ;;
+    *)
+        echo -e "${RED}不支持的系统架构: $ARCH${NC}"
+        exit 1
+        ;;
+esac
+
+echo -e "${GREEN}检测到系统架构: $ARCH (使用 $ALIYUNPAN_ARCH 版本)${NC}"
+
 # 检查是否为 root 用户
 if [ "$EUID" -ne 0 ]; then 
     echo -e "${RED}请使用 root 用户或 sudo 运行此脚本${NC}"
@@ -69,28 +89,58 @@ echo ""
 echo -e "${GREEN}开始安装...${NC}"
 echo ""
 
-# 1. 安装依赖
-echo -e "${YELLOW}[1/7] 安装必要依赖...${NC}"
-apt-get update
+# 1. 修复 apt 源问题并安装依赖
+echo -e "${YELLOW}[1/8] 修复 apt 源并安装依赖...${NC}"
+
+# 禁用有问题的 resilio-sync 源
+if [ -f /etc/apt/sources.list.d/resilio-sync.list ]; then
+    mv /etc/apt/sources.list.d/resilio-sync.list /etc/apt/sources.list.d/resilio-sync.list.bak 2>/dev/null || true
+fi
+
+# 清理重复的 google-chrome 源
+if [ -f /etc/apt/sources.list.d/google-chrome.list ]; then
+    awk '!seen[$0]++' /etc/apt/sources.list.d/google-chrome.list > /tmp/google-chrome.list.tmp
+    mv /tmp/google-chrome.list.tmp /etc/apt/sources.list.d/google-chrome.list 2>/dev/null || true
+fi
+
+apt-get update 2>&1 | grep -v "^W:" || true
 apt-get install -y wget unzip curl
 
 # 2. 下载并安装 aliyunpan
-echo -e "${YELLOW}[2/7] 下载 aliyunpan ${ALIYUNPAN_VERSION}...${NC}"
+echo -e "${YELLOW}[2/8] 下载 aliyunpan ${ALIYUNPAN_VERSION} (${ALIYUNPAN_ARCH})...${NC}"
 cd /tmp
-wget -q --show-progress https://github.com/tickstep/aliyunpan/releases/download/${ALIYUNPAN_VERSION}/aliyunpan-${ALIYUNPAN_VERSION}-linux-amd64.zip
+
+# 清理旧文件
+rm -rf aliyunpan-* 2>/dev/null || true
+
+DOWNLOAD_URL="https://github.com/tickstep/aliyunpan/releases/download/${ALIYUNPAN_VERSION}/aliyunpan-${ALIYUNPAN_VERSION}-${ALIYUNPAN_ARCH}.zip"
+echo "下载地址: $DOWNLOAD_URL"
+
+if ! wget -q --show-progress "$DOWNLOAD_URL"; then
+    echo -e "${RED}下载失败,请检查网络连接或版本号${NC}"
+    exit 1
+fi
 
 echo -e "${YELLOW}解压并安装...${NC}"
-unzip -q aliyunpan-${ALIYUNPAN_VERSION}-linux-amd64.zip
-chmod +x aliyunpan-${ALIYUNPAN_VERSION}-linux-amd64/aliyunpan
-mv aliyunpan-${ALIYUNPAN_VERSION}-linux-amd64/aliyunpan ${INSTALL_DIR}/
-rm -rf aliyunpan-${ALIYUNPAN_VERSION}-linux-amd64*
+unzip -q "aliyunpan-${ALIYUNPAN_VERSION}-${ALIYUNPAN_ARCH}.zip"
+chmod +x "aliyunpan-${ALIYUNPAN_VERSION}-${ALIYUNPAN_ARCH}/aliyunpan"
+mv "aliyunpan-${ALIYUNPAN_VERSION}-${ALIYUNPAN_ARCH}/aliyunpan" ${INSTALL_DIR}/
+rm -rf aliyunpan-${ALIYUNPAN_VERSION}-${ALIYUNPAN_ARCH}*
+
+# 验证安装
+if ! command -v aliyunpan &> /dev/null; then
+    echo -e "${RED}aliyunpan 安装失败${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}aliyunpan 安装成功: $(aliyunpan version)${NC}"
 
 # 3. 创建本地目录
-echo -e "${YELLOW}[3/7] 创建本地同步目录...${NC}"
+echo -e "${YELLOW}[3/8] 创建本地同步目录...${NC}"
 mkdir -p ${SYNC_LOCAL_DIR}
 
 # 4. 登录阿里云盘
-echo -e "${YELLOW}[4/7] 登录阿里云盘...${NC}"
+echo -e "${YELLOW}[4/8] 登录阿里云盘...${NC}"
 echo -e "${GREEN}请使用阿里云盘 App 扫描下方二维码登录:${NC}"
 echo ""
 aliyunpan login
@@ -105,7 +155,7 @@ echo -e "${GREEN}登录成功!${NC}"
 echo ""
 
 # 5. 创建同步服务
-echo -e "${YELLOW}[5/7] 创建同步服务...${NC}"
+echo -e "${YELLOW}[5/8] 创建同步服务...${NC}"
 cat > /etc/systemd/system/aliyunpan-sync.service <<EOF
 [Unit]
 Description=Aliyun Pan Sync Service
@@ -124,7 +174,7 @@ WantedBy=multi-user.target
 EOF
 
 # 6. 创建 WebDAV 服务
-echo -e "${YELLOW}[6/7] 创建 WebDAV 服务...${NC}"
+echo -e "${YELLOW}[6/8] 创建 WebDAV 服务...${NC}"
 
 # 安装 rclone 的 WebDAV 服务器 (使用系统 rclone)
 if ! command -v rclone &> /dev/null; then
@@ -155,7 +205,7 @@ WantedBy=multi-user.target
 EOF
 
 # 7. 启用并启动服务
-echo -e "${YELLOW}[7/7] 启动服务...${NC}"
+echo -e "${YELLOW}[7/8] 启动服务...${NC}"
 systemctl daemon-reload
 
 # 启动同步服务
@@ -169,12 +219,16 @@ systemctl start rclone-webdav
 # 等待服务启动
 sleep 3
 
-# 检查服务状态
+# 8. 检查服务状态和显示信息
 echo ""
 echo -e "${GREEN}=========================================="
 echo "安装完成!"
 echo "==========================================${NC}"
 echo ""
+
+# 获取外网 IP (Oracle ARM VPS 可能需要特殊处理)
+PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 ip.sb 2>/dev/null || echo "无法获取")
+PRIVATE_IP=$(hostname -I | awk '{print $1}')
 
 # 同步服务状态
 if systemctl is-active --quiet aliyunpan-sync; then
@@ -192,10 +246,14 @@ fi
 
 echo ""
 echo -e "${YELLOW}WebDAV 连接信息:${NC}"
-echo "地址: http://$(curl -s ifconfig.me):${WEBDAV_PORT}"
-echo "内网地址: http://$(hostname -I | awk '{print $1}'):${WEBDAV_PORT}"
+echo "外网地址: http://${PUBLIC_IP}:${WEBDAV_PORT}"
+echo "内网地址: http://${PRIVATE_IP}:${WEBDAV_PORT}"
 echo "用户名: ${WEBDAV_USER}"
 echo "密码: ${WEBDAV_PASSWORD}"
+echo ""
+echo -e "${YELLOW}系统信息:${NC}"
+echo "系统架构: ${ARCH}"
+echo "aliyunpan 版本: $(aliyunpan version 2>/dev/null || echo '未知')"
 echo ""
 echo -e "${YELLOW}常用命令:${NC}"
 echo "查看同步状态: systemctl status aliyunpan-sync"

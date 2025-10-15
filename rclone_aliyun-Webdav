@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# 阿里云盘双向同步 + WebDAV 服务一键安装脚本
-# 功能: 双向同步(支持删除同步) + WebDAV 远程访问
+# 阿里云盘单向下载同步 + WebDAV 服务一键安装脚本
+# 功能: 云盘→VPS单向同步(支持删除同步) + WebDAV 远程访问
 # 使用方法: chmod +x install.sh && ./install.sh
 
 set -e
 
 echo "=========================================="
-echo "阿里云盘双向同步 + WebDAV 服务安装脚本"
+echo "阿里云盘单向同步 + WebDAV 服务安装脚本"
 echo "=========================================="
 echo ""
 
@@ -63,16 +63,36 @@ SYNC_LOCAL_DIR=${INPUT_LOCAL_DIR:-$SYNC_LOCAL_DIR}
 
 echo ""
 echo -e "${BLUE}同步模式说明:${NC}"
-echo "1. increment - 增量同步 (删除文件不会同步到另一端，更安全)"
-echo "2. exclusive - 排他同步 (删除文件会同步到另一端，真正双向同步)"
+echo "1. download-only - 单向下载 (仅云盘→VPS，推荐)"
+echo "2. bidirectional - 双向同步 (支持上传，可能有冲突风险)"
 echo ""
-read -p "请选择同步策略 [1-increment/2-exclusive，默认: 2]: " SYNC_POLICY_CHOICE
-if [ "$SYNC_POLICY_CHOICE" = "1" ]; then
-    SYNC_POLICY="increment"
-    SYNC_POLICY_DESC="增量同步(删除不同步)"
+read -p "请选择同步模式 [1-单向/2-双向，默认: 1]: " SYNC_MODE_CHOICE
+if [ "$SYNC_MODE_CHOICE" = "2" ]; then
+    SYNC_MODE="bidirectional"
+    SYNC_MODE_DESC="双向同步"
+else
+    SYNC_MODE="download-only"
+    SYNC_MODE_DESC="单向下载"
+fi
+
+# 只有双向模式才询问同步策略
+if [ "$SYNC_MODE" = "bidirectional" ]; then
+    echo ""
+    echo -e "${BLUE}同步策略说明:${NC}"
+    echo "1. increment - 增量同步 (删除文件不会同步到另一端，更安全)"
+    echo "2. exclusive - 排他同步 (删除文件会同步到另一端)"
+    echo ""
+    read -p "请选择同步策略 [1-increment/2-exclusive，默认: 1]: " SYNC_POLICY_CHOICE
+    if [ "$SYNC_POLICY_CHOICE" = "2" ]; then
+        SYNC_POLICY="exclusive"
+        SYNC_POLICY_DESC="排他同步(删除会同步)"
+    else
+        SYNC_POLICY="increment"
+        SYNC_POLICY_DESC="增量同步(删除不同步)"
+    fi
 else
     SYNC_POLICY="exclusive"
-    SYNC_POLICY_DESC="排他同步(删除会同步)"
+    SYNC_POLICY_DESC="支持删除同步"
 fi
 
 read -p "请输入 WebDAV 端口 [默认: 8080]: " INPUT_PORT
@@ -93,14 +113,15 @@ echo ""
 echo -e "${GREEN}========== 配置信息确认 ==========${NC}"
 echo "云盘文件夹: $CLOUD_DIR"
 echo "本地目录: $SYNC_LOCAL_DIR"
+echo "同步模式: $SYNC_MODE_DESC"
 echo "同步策略: $SYNC_POLICY_DESC"
 echo "WebDAV 端口: $WEBDAV_PORT"
 echo "WebDAV 用户名: $WEBDAV_USER"
 echo -e "${GREEN}=================================${NC}"
 echo ""
 
-if [ "$SYNC_POLICY" = "exclusive" ]; then
-    echo -e "${RED}⚠️  警告: 您选择了排他同步模式${NC}"
+if [ "$SYNC_MODE" = "bidirectional" ] && [ "$SYNC_POLICY" = "exclusive" ]; then
+    echo -e "${RED}⚠️  警告: 您选择了双向排他同步模式${NC}"
     echo -e "${YELLOW}在此模式下:${NC}"
     echo "  - 删除云盘文件 → 本地文件也会被删除"
     echo "  - 删除本地文件 → 云盘文件也会被删除"
@@ -190,11 +211,13 @@ echo -e "${YELLOW}[5/9] 清理旧服务...${NC}"
 systemctl stop aliyunpan-sync 2>/dev/null || true
 pkill -f "aliyunpan sync" 2>/dev/null || true
 
-# 6. 创建双向同步配置文件
-echo -e "${YELLOW}[6/9] 创建双向同步配置...${NC}"
+# 6. 创建同步配置文件
+echo -e "${YELLOW}[6/9] 创建同步配置...${NC}"
 mkdir -p ~/.config/aliyunpan/sync_drive
 
-cat > ~/.config/aliyunpan/sync_drive/sync_drive_config.json <<EOF
+if [ "$SYNC_MODE" = "bidirectional" ]; then
+    # 双向同步配置
+    cat > ~/.config/aliyunpan/sync_drive/sync_drive_config.json <<EOF
 {
   "configVer": "1.0",
   "syncTaskList": [
@@ -217,14 +240,34 @@ cat > ~/.config/aliyunpan/sync_drive/sync_drive_config.json <<EOF
   ]
 }
 EOF
+    echo -e "${GREEN}已创建双向同步配置${NC}"
+else
+    # 单向下载配置
+    cat > ~/.config/aliyunpan/sync_drive/sync_drive_config.json <<EOF
+{
+  "configVer": "1.0",
+  "syncTaskList": [
+    {
+      "name": "下载同步-${CLOUD_DIR}",
+      "localFolderPath": "${SYNC_LOCAL_DIR}",
+      "panFolderPath": "${CLOUD_DIR}",
+      "mode": "download",
+      "policy": "${SYNC_POLICY}",
+      "driveName": "backup"
+    }
+  ]
+}
+EOF
+    echo -e "${GREEN}已创建单向下载配置${NC}"
+fi
 
-echo -e "${GREEN}配置文件已创建: ~/.config/aliyunpan/sync_drive/sync_drive_config.json${NC}"
+echo "配置文件: ~/.config/aliyunpan/sync_drive/sync_drive_config.json"
 
-# 7. 创建双向同步服务
-echo -e "${YELLOW}[7/9] 创建双向同步服务...${NC}"
+# 7. 创建同步服务
+echo -e "${YELLOW}[7/9] 创建同步服务...${NC}"
 cat > /etc/systemd/system/aliyunpan-sync.service <<EOF
 [Unit]
-Description=Aliyun Pan Bidirectional Sync Service
+Description=Aliyun Pan Sync Service
 After=network-online.target
 Wants=network-online.target
 
@@ -305,10 +348,10 @@ PRIVATE_IP=$(hostname -I | awk '{print $1}')
 # 显示服务状态
 echo -e "${BLUE}【服务状态】${NC}"
 if systemctl is-active --quiet aliyunpan-sync; then
-    echo -e "${GREEN}✓ 阿里云盘双向同步: 运行中${NC}"
-    ps aux | grep "aliyunpan sync" | grep -v grep | head -2
+    echo -e "${GREEN}✓ 阿里云盘同步服务: 运行中${NC}"
+    ps aux | grep "aliyunpan sync" | grep -v grep | head -1
 else
-    echo -e "${RED}✗ 阿里云盘双向同步: 启动失败${NC}"
+    echo -e "${RED}✗ 阿里云盘同步服务: 启动失败${NC}"
     echo "请运行: journalctl -u aliyunpan-sync -n 50"
 fi
 
@@ -322,11 +365,18 @@ fi
 
 echo ""
 echo -e "${BLUE}【同步配置】${NC}"
+echo "同步模式: ${SYNC_MODE_DESC}"
 echo "云盘路径: ${CLOUD_DIR}"
 echo "本地路径: ${SYNC_LOCAL_DIR}"
 echo "同步策略: ${SYNC_POLICY_DESC}"
-echo "下载并发: 2"
-echo "上传并发: 2"
+
+if [ "$SYNC_MODE" = "download-only" ]; then
+    echo ""
+    echo -e "${GREEN}✓ 单向下载模式:${NC}"
+    echo "  • 云盘新增/修改文件 → 自动同步到VPS"
+    echo "  • 云盘删除文件 → VPS本地也会删除"
+    echo "  • VPS本地操作 → 不会影响云盘"
+fi
 
 echo ""
 echo -e "${BLUE}【WebDAV 连接信息】${NC}"
@@ -366,16 +416,21 @@ echo "aliyunpan ls ${CLOUD_DIR}            # 查看云盘文件"
 echo "aliyunpan who                        # 查看登录账号"
 echo "ls -la ${SYNC_LOCAL_DIR}             # 查看本地文件"
 echo ""
-echo -e "${YELLOW}# 查看配置文件${NC}"
+echo -e "${YELLOW}# 查看/修改配置${NC}"
 echo "cat ~/.config/aliyunpan/sync_drive/sync_drive_config.json"
 echo ""
 
 echo -e "${BLUE}【重要提示】${NC}"
-if [ "$SYNC_POLICY" = "exclusive" ]; then
-    echo -e "${RED}⚠️  您使用的是排他同步模式:${NC}"
+if [ "$SYNC_MODE" = "bidirectional" ] && [ "$SYNC_POLICY" = "exclusive" ]; then
+    echo -e "${RED}⚠️  您使用的是双向排他同步模式:${NC}"
     echo "  • 删除云盘文件会同时删除本地文件"
     echo "  • 删除本地文件会同时删除云盘文件"
     echo "  • 建议定期备份重要数据!"
+elif [ "$SYNC_MODE" = "download-only" ]; then
+    echo -e "${GREEN}✓ 您使用的是单向下载模式:${NC}"
+    echo "  • 云盘是主控端，本地是镜像"
+    echo "  • 所有文件管理在云盘操作"
+    echo "  • VPS本地建议不要手动修改文件"
 else
     echo -e "${GREEN}✓ 您使用的是增量同步模式:${NC}"
     echo "  • 删除操作不会同步到另一端"
@@ -385,10 +440,9 @@ fi
 echo ""
 echo -e "${YELLOW}📝 注意事项:${NC}"
 echo "  1. 首次同步可能需要较长时间，请耐心等待"
-echo "  2. 同步有一定延迟，不是实时同步"
-echo "  3. 避免在本地和云盘同时修改同一文件"
-echo "  4. WebDAV 端口 ${WEBDAV_PORT} 需要在防火墙开放"
-echo "  5. 建议使用 HTTPS 反向代理来保护 WebDAV"
+echo "  2. 同步有一定延迟(30-60秒)，不是实时同步"
+echo "  3. WebDAV 端口 ${WEBDAV_PORT} 需要在防火墙开放"
+echo "  4. 建议使用 HTTPS 反向代理来保护 WebDAV"
 echo ""
 echo -e "${GREEN}安装脚本执行完毕!${NC}"
 echo ""
@@ -400,13 +454,22 @@ if command -v ufw &> /dev/null; then
     echo ""
 fi
 
-# 最后测试
+# 测试建议
 echo -e "${BLUE}【测试建议】${NC}"
-echo "可以运行以下命令测试同步:"
-echo ""
-echo "# 创建测试文件"
-echo "echo 'test' > ${SYNC_LOCAL_DIR}/test_$(date +%s).txt"
-echo ""
-echo "# 等待30秒后检查云盘"
-echo "sleep 30 && aliyunpan ls ${CLOUD_DIR}"
+if [ "$SYNC_MODE" = "download-only" ]; then
+    echo "可以进行以下测试:"
+    echo ""
+    echo "1. 在阿里云盘 ${CLOUD_DIR} 目录上传一个测试文件"
+    echo "2. 等待30-60秒后运行:"
+    echo "   ls -lh ${SYNC_LOCAL_DIR}/"
+    echo "3. 检查文件是否已同步到本地"
+else
+    echo "可以运行以下命令测试同步:"
+    echo ""
+    echo "# 创建测试文件"
+    echo "echo 'test' > ${SYNC_LOCAL_DIR}/test_\$(date +%s).txt"
+    echo ""
+    echo "# 等待30秒后检查云盘"
+    echo "sleep 30 && aliyunpan ls ${CLOUD_DIR}"
+fi
 echo ""

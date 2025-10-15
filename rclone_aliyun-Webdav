@@ -1,12 +1,13 @@
 #!/bin/bash
 
-# 阿里云盘同步 + WebDAV 服务一键安装脚本
+# 阿里云盘双向同步 + WebDAV 服务一键安装脚本
+# 功能: 双向同步(支持删除同步) + WebDAV 远程访问
 # 使用方法: chmod +x install.sh && ./install.sh
 
 set -e
 
 echo "=========================================="
-echo "阿里云盘同步 + WebDAV 服务安装脚本"
+echo "阿里云盘双向同步 + WebDAV 服务安装脚本"
 echo "=========================================="
 echo ""
 
@@ -14,6 +15,7 @@ echo ""
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # 配置变量
@@ -53,9 +55,25 @@ fi
 echo -e "${YELLOW}请输入配置信息:${NC}"
 echo ""
 
-read -p "请输入要同步的阿里云盘文件夹路径 (例如: /我的文件 或 / 表示根目录): " CLOUD_DIR
+read -p "请输入要同步的阿里云盘文件夹路径 (例如: /我的文件 或 / 表示根目录) [默认: /Aliyun_Disk]: " CLOUD_DIR
+CLOUD_DIR=${CLOUD_DIR:-/Aliyun_Disk}
+
 read -p "请输入本地同步目录 [默认: /root/AliyunDisk]: " INPUT_LOCAL_DIR
 SYNC_LOCAL_DIR=${INPUT_LOCAL_DIR:-$SYNC_LOCAL_DIR}
+
+echo ""
+echo -e "${BLUE}同步模式说明:${NC}"
+echo "1. increment - 增量同步 (删除文件不会同步到另一端，更安全)"
+echo "2. exclusive - 排他同步 (删除文件会同步到另一端，真正双向同步)"
+echo ""
+read -p "请选择同步策略 [1-increment/2-exclusive，默认: 2]: " SYNC_POLICY_CHOICE
+if [ "$SYNC_POLICY_CHOICE" = "1" ]; then
+    SYNC_POLICY="increment"
+    SYNC_POLICY_DESC="增量同步(删除不同步)"
+else
+    SYNC_POLICY="exclusive"
+    SYNC_POLICY_DESC="排他同步(删除会同步)"
+fi
 
 read -p "请输入 WebDAV 端口 [默认: 8080]: " INPUT_PORT
 WEBDAV_PORT=${INPUT_PORT:-$WEBDAV_PORT}
@@ -72,12 +90,24 @@ if [ -z "$WEBDAV_PASSWORD" ]; then
 fi
 
 echo ""
-echo -e "${GREEN}配置信息确认:${NC}"
+echo -e "${GREEN}========== 配置信息确认 ==========${NC}"
 echo "云盘文件夹: $CLOUD_DIR"
 echo "本地目录: $SYNC_LOCAL_DIR"
+echo "同步策略: $SYNC_POLICY_DESC"
 echo "WebDAV 端口: $WEBDAV_PORT"
 echo "WebDAV 用户名: $WEBDAV_USER"
+echo -e "${GREEN}=================================${NC}"
 echo ""
+
+if [ "$SYNC_POLICY" = "exclusive" ]; then
+    echo -e "${RED}⚠️  警告: 您选择了排他同步模式${NC}"
+    echo -e "${YELLOW}在此模式下:${NC}"
+    echo "  - 删除云盘文件 → 本地文件也会被删除"
+    echo "  - 删除本地文件 → 云盘文件也会被删除"
+    echo -e "${YELLOW}建议先备份重要数据!${NC}"
+    echo ""
+fi
+
 read -p "确认以上配置? (y/n): " CONFIRM
 
 if [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ]; then
@@ -90,7 +120,7 @@ echo -e "${GREEN}开始安装...${NC}"
 echo ""
 
 # 1. 修复 apt 源问题并安装依赖
-echo -e "${YELLOW}[1/8] 修复 apt 源并安装依赖...${NC}"
+echo -e "${YELLOW}[1/9] 修复 apt 源并安装依赖...${NC}"
 
 # 禁用有问题的 resilio-sync 源
 if [ -f /etc/apt/sources.list.d/resilio-sync.list ]; then
@@ -107,7 +137,7 @@ apt-get update 2>&1 | grep -v "^W:" || true
 apt-get install -y wget unzip curl
 
 # 2. 下载并安装 aliyunpan
-echo -e "${YELLOW}[2/8] 下载 aliyunpan ${ALIYUNPAN_VERSION} (${ALIYUNPAN_ARCH})...${NC}"
+echo -e "${YELLOW}[2/9] 下载 aliyunpan ${ALIYUNPAN_VERSION} (${ALIYUNPAN_ARCH})...${NC}"
 cd /tmp
 
 # 清理旧文件
@@ -136,11 +166,11 @@ fi
 echo -e "${GREEN}aliyunpan 安装成功: $(aliyunpan version)${NC}"
 
 # 3. 创建本地目录
-echo -e "${YELLOW}[3/8] 创建本地同步目录...${NC}"
+echo -e "${YELLOW}[3/9] 创建本地同步目录...${NC}"
 mkdir -p ${SYNC_LOCAL_DIR}
 
 # 4. 登录阿里云盘
-echo -e "${YELLOW}[4/8] 登录阿里云盘...${NC}"
+echo -e "${YELLOW}[4/9] 登录阿里云盘...${NC}"
 echo -e "${GREEN}请使用阿里云盘 App 扫描下方二维码登录:${NC}"
 echo ""
 aliyunpan login
@@ -152,31 +182,70 @@ if ! aliyunpan who > /dev/null 2>&1; then
 fi
 
 echo -e "${GREEN}登录成功!${NC}"
+aliyunpan who
 echo ""
 
-# 5. 创建同步服务
-echo -e "${YELLOW}[5/8] 创建同步服务...${NC}"
+# 5. 停止旧的同步服务（如果存在）
+echo -e "${YELLOW}[5/9] 清理旧服务...${NC}"
+systemctl stop aliyunpan-sync 2>/dev/null || true
+pkill -f "aliyunpan sync" 2>/dev/null || true
+
+# 6. 创建双向同步配置文件
+echo -e "${YELLOW}[6/9] 创建双向同步配置...${NC}"
+mkdir -p ~/.config/aliyunpan/sync_drive
+
+cat > ~/.config/aliyunpan/sync_drive/sync_drive_config.json <<EOF
+{
+  "configVer": "1.0",
+  "syncTaskList": [
+    {
+      "name": "下载同步-${CLOUD_DIR}",
+      "localFolderPath": "${SYNC_LOCAL_DIR}",
+      "panFolderPath": "${CLOUD_DIR}",
+      "mode": "download",
+      "policy": "${SYNC_POLICY}",
+      "driveName": "backup"
+    },
+    {
+      "name": "上传同步-${CLOUD_DIR}",
+      "localFolderPath": "${SYNC_LOCAL_DIR}",
+      "panFolderPath": "${CLOUD_DIR}",
+      "mode": "upload",
+      "policy": "${SYNC_POLICY}",
+      "driveName": "backup"
+    }
+  ]
+}
+EOF
+
+echo -e "${GREEN}配置文件已创建: ~/.config/aliyunpan/sync_drive/sync_drive_config.json${NC}"
+
+# 7. 创建双向同步服务
+echo -e "${YELLOW}[7/9] 创建双向同步服务...${NC}"
 cat > /etc/systemd/system/aliyunpan-sync.service <<EOF
 [Unit]
-Description=Aliyun Pan Sync Service
+Description=Aliyun Pan Bidirectional Sync Service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=root
-ExecStart=${INSTALL_DIR}/aliyunpan sync start -ldir ${SYNC_LOCAL_DIR} -pdir "${CLOUD_DIR}" -mode download
+Environment="ALIYUNPAN_CONFIG_DIR=/root/.config/aliyunpan"
+ExecStart=${INSTALL_DIR}/aliyunpan sync start --log true --dp 2 --up 2
 Restart=always
 RestartSec=10
+StandardOutput=append:/var/log/aliyunpan_sync.log
+StandardError=append:/var/log/aliyunpan_sync.log
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# 6. 创建 WebDAV 服务
-echo -e "${YELLOW}[6/8] 创建 WebDAV 服务...${NC}"
+# 8. 创建 WebDAV 服务
+echo -e "${YELLOW}[8/9] 创建 WebDAV 服务...${NC}"
 
-# 安装 rclone 的 WebDAV 服务器 (使用系统 rclone)
+# 安装 rclone
 if ! command -v rclone &> /dev/null; then
     echo "安装 rclone..."
     curl https://rclone.org/install.sh | bash
@@ -196,7 +265,9 @@ ExecStart=/usr/bin/rclone serve webdav ${SYNC_LOCAL_DIR} \\
     --addr 0.0.0.0:${WEBDAV_PORT} \\
     --user ${WEBDAV_USER} \\
     --pass ${WEBDAV_PASSWORD} \\
-    --vfs-cache-mode full
+    --vfs-cache-mode full \\
+    --log-file /var/log/rclone_webdav.log \\
+    --log-level INFO
 Restart=always
 RestartSec=10
 
@@ -204,8 +275,8 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
-# 7. 启用并启动服务
-echo -e "${YELLOW}[7/8] 启动服务...${NC}"
+# 9. 启用并启动服务
+echo -e "${YELLOW}[9/9] 启动服务...${NC}"
 systemctl daemon-reload
 
 # 启动同步服务
@@ -217,56 +288,125 @@ systemctl enable rclone-webdav
 systemctl start rclone-webdav
 
 # 等待服务启动
-sleep 3
+echo "等待服务启动..."
+sleep 5
 
-# 8. 检查服务状态和显示信息
+# 检查服务状态
 echo ""
 echo -e "${GREEN}=========================================="
-echo "安装完成!"
+echo "           安装完成!"
 echo "==========================================${NC}"
 echo ""
 
-# 获取外网 IP (Oracle ARM VPS 可能需要特殊处理)
+# 获取外网 IP
 PUBLIC_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 ip.sb 2>/dev/null || echo "无法获取")
 PRIVATE_IP=$(hostname -I | awk '{print $1}')
 
-# 同步服务状态
+# 显示服务状态
+echo -e "${BLUE}【服务状态】${NC}"
 if systemctl is-active --quiet aliyunpan-sync; then
-    echo -e "${GREEN}✓ 阿里云盘同步服务: 运行中${NC}"
+    echo -e "${GREEN}✓ 阿里云盘双向同步: 运行中${NC}"
+    ps aux | grep "aliyunpan sync" | grep -v grep | head -2
 else
-    echo -e "${RED}✗ 阿里云盘同步服务: 启动失败${NC}"
+    echo -e "${RED}✗ 阿里云盘双向同步: 启动失败${NC}"
+    echo "请运行: journalctl -u aliyunpan-sync -n 50"
 fi
 
-# WebDAV 服务状态
+echo ""
 if systemctl is-active --quiet rclone-webdav; then
     echo -e "${GREEN}✓ WebDAV 服务: 运行中${NC}"
 else
     echo -e "${RED}✗ WebDAV 服务: 启动失败${NC}"
+    echo "请运行: journalctl -u rclone-webdav -n 50"
 fi
 
 echo ""
-echo -e "${YELLOW}WebDAV 连接信息:${NC}"
+echo -e "${BLUE}【同步配置】${NC}"
+echo "云盘路径: ${CLOUD_DIR}"
+echo "本地路径: ${SYNC_LOCAL_DIR}"
+echo "同步策略: ${SYNC_POLICY_DESC}"
+echo "下载并发: 2"
+echo "上传并发: 2"
+
+echo ""
+echo -e "${BLUE}【WebDAV 连接信息】${NC}"
 echo "外网地址: http://${PUBLIC_IP}:${WEBDAV_PORT}"
 echo "内网地址: http://${PRIVATE_IP}:${WEBDAV_PORT}"
 echo "用户名: ${WEBDAV_USER}"
 echo "密码: ${WEBDAV_PASSWORD}"
+
 echo ""
-echo -e "${YELLOW}系统信息:${NC}"
+echo -e "${BLUE}【系统信息】${NC}"
 echo "系统架构: ${ARCH}"
 echo "aliyunpan 版本: $(aliyunpan version 2>/dev/null || echo '未知')"
+echo "rclone 版本: $(rclone version 2>/dev/null | head -1 || echo '未知')"
+
 echo ""
-echo -e "${YELLOW}常用命令:${NC}"
-echo "查看同步状态: systemctl status aliyunpan-sync"
-echo "查看同步日志: journalctl -u aliyunpan-sync -f"
-echo "查看 WebDAV 状态: systemctl status rclone-webdav"
-echo "查看 WebDAV 日志: journalctl -u rclone-webdav -f"
-echo "重启同步服务: systemctl restart aliyunpan-sync"
-echo "重启 WebDAV 服务: systemctl restart rclone-webdav"
-echo "查看云盘文件: aliyunpan ls /"
-echo "查看已登录账号: aliyunpan who"
+echo -e "${BLUE}【常用命令】${NC}"
 echo ""
-echo -e "${GREEN}本地同步目录: ${SYNC_LOCAL_DIR}${NC}"
-echo -e "${GREEN}云盘同步路径: ${CLOUD_DIR}${NC}"
+echo -e "${YELLOW}# 查看服务状态${NC}"
+echo "systemctl status aliyunpan-sync      # 同步服务状态"
+echo "systemctl status rclone-webdav       # WebDAV 服务状态"
 echo ""
-echo -e "${YELLOW}提示: 首次同步可能需要一些时间,请耐心等待${NC}"
+echo -e "${YELLOW}# 查看实时日志${NC}"
+echo "tail -f /var/log/aliyunpan_sync.log  # 同步日志"
+echo "tail -f /var/log/rclone_webdav.log   # WebDAV 日志"
+echo "journalctl -u aliyunpan-sync -f      # systemd 日志"
+echo ""
+echo -e "${YELLOW}# 重启服务${NC}"
+echo "systemctl restart aliyunpan-sync     # 重启同步"
+echo "systemctl restart rclone-webdav      # 重启 WebDAV"
+echo ""
+echo -e "${YELLOW}# 停止服务${NC}"
+echo "systemctl stop aliyunpan-sync        # 停止同步"
+echo "systemctl stop rclone-webdav         # 停止 WebDAV"
+echo ""
+echo -e "${YELLOW}# 阿里云盘操作${NC}"
+echo "aliyunpan ls ${CLOUD_DIR}            # 查看云盘文件"
+echo "aliyunpan who                        # 查看登录账号"
+echo "ls -la ${SYNC_LOCAL_DIR}             # 查看本地文件"
+echo ""
+echo -e "${YELLOW}# 查看配置文件${NC}"
+echo "cat ~/.config/aliyunpan/sync_drive/sync_drive_config.json"
+echo ""
+
+echo -e "${BLUE}【重要提示】${NC}"
+if [ "$SYNC_POLICY" = "exclusive" ]; then
+    echo -e "${RED}⚠️  您使用的是排他同步模式:${NC}"
+    echo "  • 删除云盘文件会同时删除本地文件"
+    echo "  • 删除本地文件会同时删除云盘文件"
+    echo "  • 建议定期备份重要数据!"
+else
+    echo -e "${GREEN}✓ 您使用的是增量同步模式:${NC}"
+    echo "  • 删除操作不会同步到另一端"
+    echo "  • 需要手动清理不需要的文件"
+fi
+
+echo ""
+echo -e "${YELLOW}📝 注意事项:${NC}"
+echo "  1. 首次同步可能需要较长时间，请耐心等待"
+echo "  2. 同步有一定延迟，不是实时同步"
+echo "  3. 避免在本地和云盘同时修改同一文件"
+echo "  4. WebDAV 端口 ${WEBDAV_PORT} 需要在防火墙开放"
+echo "  5. 建议使用 HTTPS 反向代理来保护 WebDAV"
+echo ""
+echo -e "${GREEN}安装脚本执行完毕!${NC}"
+echo ""
+
+# 显示防火墙提示
+if command -v ufw &> /dev/null; then
+    echo -e "${YELLOW}检测到 ufw 防火墙，如需外网访问请运行:${NC}"
+    echo "ufw allow ${WEBDAV_PORT}/tcp"
+    echo ""
+fi
+
+# 最后测试
+echo -e "${BLUE}【测试建议】${NC}"
+echo "可以运行以下命令测试同步:"
+echo ""
+echo "# 创建测试文件"
+echo "echo 'test' > ${SYNC_LOCAL_DIR}/test_$(date +%s).txt"
+echo ""
+echo "# 等待30秒后检查云盘"
+echo "sleep 30 && aliyunpan ls ${CLOUD_DIR}"
 echo ""

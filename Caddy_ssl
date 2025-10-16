@@ -189,17 +189,26 @@ EOF
     gen_config "$domain" "$port" >> /etc/caddy/Caddyfile
     
     # 验证并重载
-    if caddy validate --config /etc/caddy/Caddyfile 2>&1 | grep -q "Valid"; then
+    if caddy validate --config /etc/caddy/Caddyfile > /dev/null 2>&1; then
         systemctl reload caddy 2>/dev/null || systemctl restart caddy
+        sleep 1
         
-        if [ "$https_port" == "443" ]; then
-            print_success "配置完成: https://$domain"
+        if systemctl is-active --quiet caddy; then
+            if [ "$https_port" == "443" ]; then
+                print_success "配置完成: https://$domain"
+            else
+                print_success "配置完成: https://$domain:$https_port"
+            fi
+            print_info "SSL 证书将在首次访问时自动申请"
+            return 0
         else
-            print_success "配置完成: https://$domain:$https_port"
+            print_error "Caddy 启动失败"
+            journalctl -u caddy -n 10 --no-pager
+            return 1
         fi
-        return 0
     else
         print_error "配置验证失败"
+        caddy validate --config /etc/caddy/Caddyfile 2>&1 | tail -5
         return 1
     fi
 }

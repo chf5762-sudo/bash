@@ -98,7 +98,11 @@ install_caddy() {
     apt-get update -qq > /dev/null 2>&1
     apt-get install -y -qq caddy > /dev/null 2>&1
     
+    # 创建日志目录并设置正确权限
     mkdir -p /var/log/caddy
+    chown -R caddy:caddy /var/log/caddy
+    chmod 755 /var/log/caddy
+    
     systemctl enable caddy 2>/dev/null
     
     print_success "Caddy 安装完成"
@@ -161,6 +165,11 @@ add_or_update_site() {
     local port=$2
     local http_port=${3:-80}
     local https_port=${4:-443}
+    
+    # 确保日志目录存在且权限正确
+    mkdir -p /var/log/caddy
+    chown -R caddy:caddy /var/log/caddy 2>/dev/null || chown -R www-data:www-data /var/log/caddy 2>/dev/null
+    chmod 755 /var/log/caddy
     
     # 初始化配置文件
     if [ ! -f /etc/caddy/Caddyfile ]; then

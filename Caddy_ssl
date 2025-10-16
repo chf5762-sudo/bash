@@ -59,8 +59,8 @@ handle_port_conflict() {
     echo "2) 使用备用端口 (81/8443)"
     echo "3) 退出"
     echo ""
-    
-    read -r -p "选择 [1-3]: " choice
+    echo -n "选择 [1-3]: "
+    read choice
     
     case $choice in
         1)
@@ -114,7 +114,8 @@ check_dns() {
         print_warning "DNS 未正确解析或解析到其他IP"
         echo "服务器 IP: $server_ip"
         echo "域名解析: ${domain_ip:-未解析}"
-        read -r -p "继续? (y/n): " cont
+        echo -n "继续? (y/n): "
+        read cont
         [[ $cont != "y" && $cont != "Y" ]] && return 1
     fi
     return 0
@@ -258,10 +259,12 @@ quick_add() {
     print_title "===== 快速添加站点 ====="
     echo ""
     
-    read -r -p "域名: " domain
+    echo -n "域名: "
+    read domain
     [ -z "$domain" ] && { print_error "域名不能为空"; return 1; }
     
-    read -r -p "端口: " port
+    echo -n "端口: "
+    read port
     [ -z "$port" ] && { print_error "端口不能为空"; return 1; }
     [[ ! "$port" =~ ^[0-9]+$ ]] && { print_error "端口必须是数字"; return 1; }
     
@@ -305,30 +308,39 @@ main() {
     # 交互式菜单
     while true; do
         show_menu
-        read -r -p "请选择 [0-5]: " choice
+        echo -n "请选择 [0-5]: "
+        read choice
+        echo ""
         
         case $choice in
             1)
                 quick_add
-                read -r -p "按回车继续..."
+                echo ""
+                echo -n "按回车继续..."
+                read dummy
                 ;;
             2)
                 list_sites
-                read -r -p "输入要删除的域名: " domain
+                echo -n "输入要删除的域名: "
+                read domain
                 [ ! -z "$domain" ] && remove_site "$domain"
-                read -r -p "按回车继续..."
+                echo ""
+                echo -n "按回车继续..."
+                read dummy
                 ;;
             3)
                 echo ""
                 cat /etc/caddy/Caddyfile
                 echo ""
-                read -r -p "按回车继续..."
+                echo -n "按回车继续..."
+                read dummy
                 ;;
             4)
                 echo ""
                 systemctl status caddy --no-pager -l
                 echo ""
-                read -r -p "按回车继续..."
+                echo -n "按回车继续..."
+                read dummy
                 ;;
             5)
                 systemctl restart caddy

@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # 文件名: vps-webssh-deploy.sh
-# 版本: v2.0
+# 版本: v2.1
 # 作者: chf5762
 # 描述: VPS WebSSH服务一键部署和管理脚本
 # GitHub: https://github.com/chf5762-sudo/bash
@@ -19,7 +19,7 @@ set -e
 # ============================================
 # 配置变量
 # ============================================
-SCRIPT_VERSION="v2.0"
+SCRIPT_VERSION="v2.1"
 CONTAINER_NAME="webssh"
 WEBSSH_PORT=8899
 SSH_PORT=22
@@ -222,7 +222,8 @@ deploy_webssh() {
         --restart=always \
         -p $WEBSSH_PORT:8080 \
         -e SAVEPASS=true \
-        $DOCKER_IMAGE
+        $DOCKER_IMAGE \
+        wssh --address=0.0.0.0 --port=8080
     
     sleep 3
     
@@ -260,7 +261,7 @@ deploy_webssh() {
     echo ""
     echo "管理命令:"
     echo "  再次运行此脚本进入管理菜单"
-    echo "  $0"
+    echo "  bash <(curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/vps-webssh-deploy.sh)"
     echo ""
     print_line
 }
@@ -364,19 +365,37 @@ modify_config() {
             read -p "请输入新的WebSSH端口: " NEW_PORT
             WEBSSH_PORT=$NEW_PORT
             print_info "需要重新部署以应用更改"
+            read -p "是否立即重新部署? (y/n): " redeploy
+            if [ "$redeploy" = "y" ] || [ "$redeploy" = "Y" ]; then
+                save_config
+                docker stop $CONTAINER_NAME 2>/dev/null || true
+                docker rm $CONTAINER_NAME 2>/dev/null || true
+                docker run -d \
+                    --name $CONTAINER_NAME \
+                    --restart=always \
+                    -p $WEBSSH_PORT:8080 \
+                    -e SAVEPASS=true \
+                    $DOCKER_IMAGE \
+                    wssh --address=0.0.0.0 --port=8080
+                configure_firewall
+                print_success "重新部署完成"
+            fi
             ;;
         2)
             read -p "请输入新的SSH端口: " NEW_PORT
             SSH_PORT=$NEW_PORT
+            save_config
             ;;
         3)
             read -p "请输入新的SSH用户: " NEW_USER
             SSH_USER=$NEW_USER
+            save_config
             ;;
         4)
             read -s -p "请输入新的SSH密码: " NEW_PASS
             echo ""
             SSH_PASSWORD=$NEW_PASS
+            save_config
             ;;
         0)
             return
@@ -386,9 +405,6 @@ modify_config() {
             return
             ;;
     esac
-    
-    save_config
-    print_success "配置已更新"
 }
 
 # 卸载服务

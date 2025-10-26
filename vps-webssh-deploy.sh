@@ -19,13 +19,14 @@ set -e
 # ============================================
 # 配置变量
 # ============================================
-SCRIPT_VERSION="v2.1"
+SCRIPT_VERSION="v2.2"
 CONTAINER_NAME="webssh"
 WEBSSH_PORT=8899
 SSH_PORT=22
 SSH_USER="root"
 SSH_PASSWORD="@Cyn5762579"
-DOCKER_IMAGE="snsyzb/webssh:latest"
+# Docker镜像将根据架构自动选择
+DOCKER_IMAGE=""
 CONFIG_FILE="/etc/webssh/config.conf"
 
 # 颜色定义
@@ -80,6 +81,34 @@ check_system() {
         exit 1
     fi
     print_info "检测到系统: $OS $VER"
+}
+
+# 检测CPU架构并选择合适的镜像
+detect_architecture() {
+    local arch=$(uname -m)
+    
+    case $arch in
+        x86_64|amd64)
+            DOCKER_IMAGE="snsyzb/webssh:latest"
+            print_info "检测到架构: x86_64/AMD64"
+            print_info "使用镜像: $DOCKER_IMAGE"
+            ;;
+        aarch64|arm64)
+            DOCKER_IMAGE="darktohka/webssh-docker:latest"
+            print_info "检测到架构: ARM64"
+            print_info "使用镜像: $DOCKER_IMAGE (支持ARM64)"
+            ;;
+        armv7l|armhf)
+            DOCKER_IMAGE="darktohka/webssh-docker:latest"
+            print_info "检测到架构: ARMv7"
+            print_info "使用镜像: $DOCKER_IMAGE (支持ARMv7)"
+            ;;
+        *)
+            print_warning "检测到未知架构: $arch"
+            print_info "尝试使用多架构镜像: darktohka/webssh-docker:latest"
+            DOCKER_IMAGE="darktohka/webssh-docker:latest"
+            ;;
+    esac
 }
 
 # 检查Docker是否安装
@@ -190,18 +219,19 @@ deploy_webssh() {
     echo ""
     
     # 1. 检查环境
-    print_info "[1/6] 检查运行环境..."
+    print_info "[1/7] 检查运行环境..."
     check_root
     check_system
+    detect_architecture
     
     # 2. 检查并安装Docker
-    print_info "[2/6] 检查Docker..."
+    print_info "[2/7] 检查Docker..."
     if ! check_docker; then
         install_docker
     fi
     
     # 3. 停止旧容器
-    print_info "[3/6] 清理旧容器..."
+    print_info "[3/7] 清理旧容器..."
     if docker ps -a | grep -q $CONTAINER_NAME; then
         docker stop $CONTAINER_NAME 2>/dev/null || true
         docker rm $CONTAINER_NAME 2>/dev/null || true
@@ -211,12 +241,12 @@ deploy_webssh() {
     fi
     
     # 4. 拉取镜像
-    print_info "[4/6] 拉取WebSSH镜像..."
+    print_info "[4/7] 拉取WebSSH镜像..."
     docker pull $DOCKER_IMAGE
     print_success "镜像拉取完成"
     
     # 5. 启动容器
-    print_info "[5/6] 启动WebSSH服务..."
+    print_info "[5/7] 启动WebSSH服务..."
     docker run -d \
         --name $CONTAINER_NAME \
         --restart=always \
@@ -235,10 +265,11 @@ deploy_webssh() {
     fi
     
     # 6. 配置防火墙
-    print_info "[6/6] 配置防火墙..."
+    print_info "[6/7] 配置防火墙..."
     configure_firewall
     
-    # 保存配置
+    # 7. 保存配置
+    print_info "[7/7] 保存配置..."
     save_config
     
     # 获取服务器IP
@@ -252,6 +283,9 @@ deploy_webssh() {
     echo ""
     echo "WebSSH访问地址:"
     echo "  http://$SERVER_IP:$WEBSSH_PORT"
+    echo ""
+    echo "系统架构: $(uname -m)"
+    echo "使用镜像: $DOCKER_IMAGE"
     echo ""
     echo "SSH连接参数:"
     echo "  Hostname: 127.0.0.1"
@@ -368,6 +402,7 @@ modify_config() {
             read -p "是否立即重新部署? (y/n): " redeploy
             if [ "$redeploy" = "y" ] || [ "$redeploy" = "Y" ]; then
                 save_config
+                detect_architecture
                 docker stop $CONTAINER_NAME 2>/dev/null || true
                 docker rm $CONTAINER_NAME 2>/dev/null || true
                 docker run -d \
@@ -492,6 +527,10 @@ main() {
     if [ -f $CONFIG_FILE ] && docker ps -a | grep -q $CONTAINER_NAME; then
         # 已安装，进入管理菜单
         load_config
+        # 加载架构信息
+        if [ -z "$DOCKER_IMAGE" ]; then
+            detect_architecture
+        fi
         show_menu
     else
         # 未安装，执行部署

@@ -1,15 +1,16 @@
 #!/bin/bash
 #
 # 文件名: vps-webssh-deploy.sh
-# 版本: v2.3
+# 版本: v2.4
 # 作者: chf5762
-# 描述: VPS WebSSH服务一键部署和管理脚本 (Host网络模式)
+# 描述: VPS WebSSH服务一键部署和管理脚本 (优化远程SSH访问)
 # GitHub: https://github.com/chf5762-sudo/bash
 # 
-# 更新日志 v2.3:
-#   - 采用host网络模式解决容器无法访问宿主机SSH问题
-#   - 优化网络配置,确保WebSSH能连接到127.0.0.1:22
-#   - 添加SSH服务检查和自动修复
+# 更新日志 v2.4:
+#   - 完全卸载旧容器和镜像后重新部署
+#   - 使用桥接网络模式(适合远程SSH访问)
+#   - 添加 --policy=autoadd 自动接受主机密钥
+#   - 优化远程连接配置
 #
 # 功能:
 #   - 首次运行: 自动检测环境、安装Docker、部署WebSSH
@@ -24,16 +25,16 @@ set -e
 # ============================================
 # 配置变量
 # ============================================
-SCRIPT_VERSION="v2.3"
+SCRIPT_VERSION="v2.4"
 CONTAINER_NAME="webssh"
 WEBSSH_PORT=8899
-SSH_PORT=22
+WEBSSH_INTERNAL_PORT=8080
 SSH_USER="root"
 SSH_PASSWORD="password"
 # Docker镜像将根据架构自动选择
 DOCKER_IMAGE=""
 CONFIG_FILE="/etc/webssh/config.conf"
-NETWORK_MODE="host"  # 使用host网络模式
+NETWORK_MODE="bridge"  # 使用桥接网络模式(适合远程访问)
 
 # 颜色定义
 RED='\033[0;31m'
@@ -157,86 +158,38 @@ install_docker() {
     fi
 }
 
-# 检查SSH服务
-check_ssh_service() {
-    print_info "检查SSH服务..."
+# 完全卸载旧的WebSSH
+uninstall_old_webssh() {
+    print_info "检查并清理旧的WebSSH部署..."
     
-    # 检查SSH服务是否运行
-    if systemctl is-active --quiet sshd || systemctl is-active --quiet ssh; then
-        print_success "SSH服务运行正常"
-        
-        # 检查SSH端口监听
-        if ss -tlnp | grep -q ":$SSH_PORT " || netstat -tlnp 2>/dev/null | grep -q ":$SSH_PORT "; then
-            print_success "SSH端口 $SSH_PORT 监听正常"
-        else
-            print_warning "SSH端口 $SSH_PORT 未监听"
-        fi
-        
-        # 测试本地SSH连接
-        if timeout 3 bash -c "</dev/tcp/127.0.0.1/$SSH_PORT" 2>/dev/null; then
-            print_success "本地SSH连接测试通过"
-        else
-            print_warning "本地SSH连接测试失败,尝试修复..."
-            # 重启SSH服务
-            systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
-            sleep 2
-            if timeout 3 bash -c "</dev/tcp/127.0.0.1/$SSH_PORT" 2>/dev/null; then
-                print_success "SSH服务修复成功"
-            else
-                print_error "SSH服务修复失败,请手动检查"
-            fi
-        fi
+    # 停止并删除所有名为webssh的容器
+    if docker ps -a | grep -q $CONTAINER_NAME; then
+        print_info "发现旧容器,正在停止..."
+        docker stop $CONTAINER_NAME 2>/dev/null || true
+        print_info "删除旧容器..."
+        docker rm -f $CONTAINER_NAME 2>/dev/null || true
+        print_success "旧容器已删除"
     else
-        print_error "SSH服务未运行"
-        print_info "尝试启动SSH服务..."
-        systemctl start sshd 2>/dev/null || systemctl start ssh 2>/dev/null
-        sleep 2
-        if systemctl is-active --quiet sshd || systemctl is-active --quiet ssh; then
-            print_success "SSH服务启动成功"
-        else
-            print_error "SSH服务启动失败,请手动检查"
-            exit 1
-        fi
-    fi
-}
-
-# 配置SSH允许密码登录
-configure_ssh() {
-    print_info "检查SSH配置..."
-    
-    SSH_CONFIG="/etc/ssh/sshd_config"
-    NEED_RESTART=false
-    
-    # 确保PasswordAuthentication开启
-    if grep -q "^PasswordAuthentication no" $SSH_CONFIG; then
-        print_info "启用SSH密码认证..."
-        sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' $SSH_CONFIG
-        NEED_RESTART=true
-    elif ! grep -q "^PasswordAuthentication yes" $SSH_CONFIG; then
-        echo "PasswordAuthentication yes" >> $SSH_CONFIG
-        NEED_RESTART=true
+        print_info "未发现旧容器"
     fi
     
-    # 确保PermitRootLogin开启
-    if grep -q "^PermitRootLogin" $SSH_CONFIG; then
-        if ! grep -q "^PermitRootLogin yes" $SSH_CONFIG; then
-            print_info "允许root登录..."
-            sed -i 's/^PermitRootLogin.*/PermitRootLogin yes/' $SSH_CONFIG
-            NEED_RESTART=true
-        fi
+    # 删除所有WebSSH相关镜像
+    print_info "检查WebSSH镜像..."
+    local images_to_remove=$(docker images | grep -E "snsyzb/webssh|darktohka/webssh|jrohy/webssh" | awk '{print $3}')
+    
+    if [ -n "$images_to_remove" ]; then
+        print_info "发现旧镜像,正在删除..."
+        echo "$images_to_remove" | xargs -r docker rmi -f 2>/dev/null || true
+        print_success "旧镜像已删除"
     else
-        echo "PermitRootLogin yes" >> $SSH_CONFIG
-        NEED_RESTART=true
+        print_info "未发现旧镜像"
     fi
     
-    if [ "$NEED_RESTART" = true ]; then
-        print_info "重启SSH服务以应用配置..."
-        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null
-        sleep 2
-        print_success "SSH配置已更新"
-    else
-        print_success "SSH配置正常"
-    fi
+    # 清理dangling镜像
+    print_info "清理悬空镜像..."
+    docker image prune -f >/dev/null 2>&1 || true
+    
+    print_success "清理完成"
 }
 
 # 配置防火墙
@@ -277,7 +230,7 @@ save_config() {
 # WebSSH配置文件
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 WEBSSH_PORT=$WEBSSH_PORT
-SSH_PORT=$SSH_PORT
+WEBSSH_INTERNAL_PORT=$WEBSSH_INTERNAL_PORT
 SSH_USER=$SSH_USER
 SSH_PASSWORD=$SSH_PASSWORD
 DOCKER_IMAGE=$DOCKER_IMAGE
@@ -304,68 +257,54 @@ load_config() {
 deploy_webssh() {
     print_line
     echo "VPS WebSSH 一键部署脚本 $SCRIPT_VERSION"
-    echo "网络模式: Host Mode (解决SSH连接问题)"
+    echo "针对远程SSH访问优化"
     print_line
     echo ""
     
     # 1. 检查环境
-    print_info "[1/9] 检查运行环境..."
+    print_info "[1/8] 检查运行环境..."
     check_root
     check_system
     detect_architecture
     
     # 2. 检查并安装Docker
-    print_info "[2/9] 检查Docker..."
+    print_info "[2/8] 检查Docker..."
     if ! check_docker; then
         install_docker
     fi
     
-    # 3. 检查SSH服务
-    print_info "[3/9] 检查SSH服务..."
-    check_ssh_service
+    # 3. 完全卸载旧部署
+    print_info "[3/8] 清理旧部署..."
+    uninstall_old_webssh
     
-    # 4. 配置SSH
-    print_info "[4/9] 配置SSH..."
-    configure_ssh
-    
-    # 5. 停止旧容器
-    print_info "[5/9] 清理旧容器..."
-    if docker ps -a | grep -q $CONTAINER_NAME; then
-        docker stop $CONTAINER_NAME 2>/dev/null || true
-        docker rm $CONTAINER_NAME 2>/dev/null || true
-        print_success "旧容器已清理"
-    else
-        print_info "无需清理"
-    fi
-    
-    # 6. 拉取镜像
-    print_info "[6/9] 拉取WebSSH镜像..."
+    # 4. 拉取新镜像
+    print_info "[4/8] 拉取WebSSH镜像..."
     docker pull $DOCKER_IMAGE
     print_success "镜像拉取完成"
     
-    # 7. 启动容器
-    print_info "[7/9] 启动WebSSH服务 (Host网络模式)..."
+    # 5. 启动容器
+    print_info "[5/8] 启动WebSSH服务..."
     
-    # 使用host网络模式启动容器
+    # 根据不同镜像使用不同的启动参数
     if [[ "$DOCKER_IMAGE" == "darktohka/webssh-docker"* ]]; then
-        # darktohka 镜像 - host模式
+        # darktohka 镜像 - 桥接模式,自动接受主机密钥
         docker run -d \
             --name $CONTAINER_NAME \
             --restart=always \
-            --network host \
+            -p $WEBSSH_PORT:8888 \
             $DOCKER_IMAGE \
-            --port=$WEBSSH_PORT \
             --fbidhttp=False \
-            --xheaders=False
+            --xheaders=False \
+            --policy=autoadd
     else
-        # snsyzb 镜像 - host模式
+        # snsyzb 镜像 - 桥接模式,自动接受主机密钥
         docker run -d \
             --name $CONTAINER_NAME \
             --restart=always \
-            --network host \
+            -p $WEBSSH_PORT:$WEBSSH_INTERNAL_PORT \
             -e SAVEPASS=true \
             $DOCKER_IMAGE \
-            wssh --address=0.0.0.0 --port=$WEBSSH_PORT
+            wssh --address=0.0.0.0 --port=$WEBSSH_INTERNAL_PORT --policy=autoadd
     fi
     
     sleep 3
@@ -379,22 +318,22 @@ deploy_webssh() {
         exit 1
     fi
     
-    # 8. 配置防火墙
-    print_info "[8/9] 配置防火墙..."
+    # 6. 配置防火墙
+    print_info "[6/8] 配置防火墙..."
     configure_firewall
     
-    # 9. 保存配置
-    print_info "[9/9] 保存配置..."
-    save_config
-    
-    # 测试服务
-    print_info "测试WebSSH服务..."
+    # 7. 测试服务
+    print_info "[7/8] 测试WebSSH服务..."
     sleep 2
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:$WEBSSH_PORT | grep -q "200\|301\|302"; then
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:$WEBSSH_PORT 2>/dev/null | grep -q "200\|301\|302"; then
         print_success "WebSSH服务测试通过"
     else
         print_warning "WebSSH服务可能未正常启动,请查看日志"
     fi
+    
+    # 8. 保存配置
+    print_info "[8/8] 保存配置..."
+    save_config
     
     # 获取服务器IP
     SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip || hostname -I | awk '{print $1}')
@@ -408,15 +347,16 @@ deploy_webssh() {
     echo "WebSSH访问地址:"
     echo "  http://$SERVER_IP:$WEBSSH_PORT"
     echo ""
-    echo "网络模式: Host Mode"
+    echo "网络模式: Bridge (适合远程SSH访问)"
+    echo "主机密钥策略: 自动接受 (autoadd)"
     echo "系统架构: $(uname -m)"
     echo "使用镜像: $DOCKER_IMAGE"
     echo ""
-    echo "SSH连接参数 (在WebSSH界面中使用):"
-    echo "  Hostname: 127.0.0.1 或 localhost"
-    echo "  Port: $SSH_PORT"
-    echo "  Username: $SSH_USER"
-    echo "  Password: $SSH_PASSWORD"
+    echo "在WebSSH界面中连接远程服务器的参数示例:"
+    echo "  Hostname: 远程服务器的IP或域名"
+    echo "  Port: 22 (或远程服务器的SSH端口)"
+    echo "  Username: root (或远程服务器的用户名)"
+    echo "  Password: ******* (远程服务器的密码)"
     echo ""
     echo "管理命令:"
     echo "  再次运行此脚本进入管理菜单"
@@ -482,7 +422,7 @@ show_status() {
         print_success "服务运行中"
         echo ""
         echo "容器信息:"
-        docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Networks}}"
+        docker ps --filter "name=$CONTAINER_NAME" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
         echo ""
         echo "资源占用:"
         docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}" $CONTAINER_NAME
@@ -500,6 +440,7 @@ show_status() {
     SERVER_IP=$(curl -s ifconfig.me || curl -s ipinfo.io/ip || hostname -I | awk '{print $1}')
     echo "访问地址: http://$SERVER_IP:$WEBSSH_PORT"
     echo "网络模式: $NETWORK_MODE"
+    echo "主机密钥: 自动接受"
     echo ""
     print_line
 }
@@ -511,39 +452,32 @@ show_logs() {
     docker logs --tail 50 -f $CONTAINER_NAME
 }
 
-# 测试SSH连接
-test_ssh_connection() {
+# 测试连接
+test_service() {
     echo ""
     print_line
-    echo "测试SSH连接"
+    echo "测试WebSSH服务"
     print_line
     echo ""
     
-    print_info "检查SSH服务..."
-    if systemctl is-active --quiet sshd || systemctl is-active --quiet ssh; then
-        print_success "SSH服务运行中"
+    print_info "测试WebSSH HTTP服务..."
+    if curl -s -o /dev/null -w "%{http_code}" http://localhost:$WEBSSH_PORT 2>/dev/null | grep -q "200\|301\|302"; then
+        print_success "WebSSH HTTP服务正常"
     else
-        print_error "SSH服务未运行"
-        return
+        print_error "WebSSH HTTP服务异常"
     fi
     
-    print_info "测试端口连接..."
-    if timeout 3 bash -c "</dev/tcp/127.0.0.1/$SSH_PORT" 2>/dev/null; then
-        print_success "SSH端口 $SSH_PORT 可访问"
+    print_info "检查容器状态..."
+    if check_container; then
+        print_success "容器运行正常"
+        echo ""
+        docker ps --filter "name=$CONTAINER_NAME"
     else
-        print_error "SSH端口 $SSH_PORT 无法访问"
-        return
-    fi
-    
-    print_info "测试WebSSH服务..."
-    if curl -s -o /dev/null -w "%{http_code}" http://localhost:$WEBSSH_PORT | grep -q "200\|301\|302"; then
-        print_success "WebSSH服务正常"
-    else
-        print_error "WebSSH服务异常"
+        print_error "容器未运行"
     fi
     
     echo ""
-    print_success "所有测试通过!"
+    print_info "提示: 如需测试远程SSH连接,请在WebSSH界面中操作"
 }
 
 # 修改配置
@@ -558,11 +492,10 @@ modify_config() {
     
     echo "当前配置:"
     echo "  1. WebSSH端口: $WEBSSH_PORT"
-    echo "  2. SSH端口: $SSH_PORT"
-    echo "  3. SSH用户: $SSH_USER"
-    echo "  4. SSH密码: $SSH_PASSWORD"
+    echo "  2. 默认SSH用户: $SSH_USER"
+    echo "  3. 默认SSH密码: $SSH_PASSWORD"
     echo ""
-    read -p "请选择要修改的配置 (1-4, 0返回): " choice
+    read -p "请选择要修改的配置 (1-3, 0返回): " choice
     
     case $choice in
         1)
@@ -576,24 +509,24 @@ modify_config() {
                 docker stop $CONTAINER_NAME 2>/dev/null || true
                 docker rm $CONTAINER_NAME 2>/dev/null || true
                 
-                # 使用host网络模式重新部署
+                # 重新部署
                 if [[ "$DOCKER_IMAGE" == "darktohka/webssh-docker"* ]]; then
                     docker run -d \
                         --name $CONTAINER_NAME \
                         --restart=always \
-                        --network host \
+                        -p $WEBSSH_PORT:8888 \
                         $DOCKER_IMAGE \
-                        --port=$WEBSSH_PORT \
                         --fbidhttp=False \
-                        --xheaders=False
+                        --xheaders=False \
+                        --policy=autoadd
                 else
                     docker run -d \
                         --name $CONTAINER_NAME \
                         --restart=always \
-                        --network host \
+                        -p $WEBSSH_PORT:$WEBSSH_INTERNAL_PORT \
                         -e SAVEPASS=true \
                         $DOCKER_IMAGE \
-                        wssh --address=0.0.0.0 --port=$WEBSSH_PORT
+                        wssh --address=0.0.0.0 --port=$WEBSSH_INTERNAL_PORT --policy=autoadd
                 fi
                 
                 configure_firewall
@@ -601,22 +534,17 @@ modify_config() {
             fi
             ;;
         2)
-            read -p "请输入新的SSH端口: " NEW_PORT
-            SSH_PORT=$NEW_PORT
-            save_config
-            print_info "请确保SSH服务也使用相同端口"
-            ;;
-        3)
-            read -p "请输入新的SSH用户: " NEW_USER
+            read -p "请输入新的默认SSH用户: " NEW_USER
             SSH_USER=$NEW_USER
             save_config
+            print_success "配置已更新(仅作为参考,不影响实际连接)"
             ;;
-        4)
-            read -s -p "请输入新的SSH密码: " NEW_PASS
+        3)
+            read -s -p "请输入新的默认SSH密码: " NEW_PASS
             echo ""
             SSH_PASSWORD=$NEW_PASS
             save_config
-            print_info "请确保系统用户密码已同步修改"
+            print_success "配置已更新(仅作为参考,不影响实际连接)"
             ;;
         0)
             return
@@ -628,7 +556,7 @@ modify_config() {
     esac
 }
 
-# 卸载服务
+# 完全卸载服务
 uninstall_service() {
     echo ""
     print_warning "警告: 此操作将完全卸载WebSSH服务"
@@ -640,17 +568,17 @@ uninstall_service() {
         # 停止并删除容器
         if docker ps -a | grep -q $CONTAINER_NAME; then
             docker stop $CONTAINER_NAME 2>/dev/null || true
-            docker rm $CONTAINER_NAME 2>/dev/null || true
+            docker rm -f $CONTAINER_NAME 2>/dev/null || true
             print_success "容器已删除"
         fi
         
         # 删除镜像
-        if docker images | grep -q "$DOCKER_IMAGE"; then
-            read -p "是否同时删除Docker镜像? (y/n): " del_image
-            if [ "$del_image" = "y" ] || [ "$del_image" = "Y" ]; then
-                docker rmi $DOCKER_IMAGE 2>/dev/null || true
-                print_success "镜像已删除"
-            fi
+        print_info "清理WebSSH镜像..."
+        local images_to_remove=$(docker images | grep -E "snsyzb/webssh|darktohka/webssh|jrohy/webssh" | awk '{print $3}')
+        
+        if [ -n "$images_to_remove" ]; then
+            echo "$images_to_remove" | xargs -r docker rmi -f 2>/dev/null || true
+            print_success "镜像已删除"
         fi
         
         # 删除配置
@@ -662,6 +590,20 @@ uninstall_service() {
         print_success "卸载完成"
     else
         print_info "已取消卸载"
+    fi
+}
+
+# 重新部署
+redeploy_service() {
+    echo ""
+    print_warning "警告: 此操作将重新部署WebSSH服务"
+    read -p "确定要继续吗? (y/n): " confirm
+    
+    if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        print_info "开始重新部署..."
+        deploy_webssh
+    else
+        print_info "已取消重新部署"
     fi
 }
 
@@ -678,12 +620,13 @@ show_menu() {
         echo "  3. 重启服务"
         echo "  4. 查看状态"
         echo "  5. 查看日志"
-        echo "  6. 测试连接"
+        echo "  6. 测试服务"
         echo "  7. 修改配置"
-        echo "  8. 卸载服务"
+        echo "  8. 重新部署"
+        echo "  9. 卸载服务"
         echo "  0. 退出"
         echo ""
-        read -p "请选择操作 [0-8]: " choice
+        read -p "请选择操作 [0-9]: " choice
         
         case $choice in
             1) start_service ;;
@@ -691,9 +634,10 @@ show_menu() {
             3) restart_service ;;
             4) show_status ;;
             5) show_logs ;;
-            6) test_ssh_connection ;;
+            6) test_service ;;
             7) modify_config ;;
-            8) uninstall_service ;;
+            8) redeploy_service ;;
+            9) uninstall_service ;;
             0) 
                 print_info "退出管理菜单"
                 exit 0

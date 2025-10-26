@@ -25,7 +25,7 @@ WEBSSH_PORT=8899
 SSH_PORT=22
 SSH_USER="root"
 SSH_PASSWORD="@Cyn5762579"
-DOCKER_IMAGE="huashengdun/webssh:latest"
+DOCKER_IMAGE="snsyzb/webssh:latest"
 CONFIG_FILE="/etc/webssh/config.conf"
 
 # 颜色定义
@@ -408,7 +408,7 @@ uninstall_service() {
         fi
         
         # 删除镜像
-        if docker images | grep -q "huashengdun/webssh"; then
+        if docker images | grep -q "snsyzb/webssh"; then
             docker rmi $DOCKER_IMAGE 2>/dev/null || true
             print_success "镜像已删除"
         fi

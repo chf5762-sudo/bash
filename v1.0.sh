@@ -1,10 +1,12 @@
 #!/bin/bash
 #
 # 文件名: vps-webssh-deploy.sh
-# 版本: v2.0
+# 版本: v2.1
 # 作者: chf5762
 # 描述: VPS WebSSH服务一键部署和管理脚本
 # GitHub: https://github.com/chf5762-sudo/bash
+# 更新日期: 2025-10-26
+# 更新内容: 修复Docker镜像源问题，更换为官方稳定镜像
 # 
 # 功能:
 #   - 首次运行: 自动检测环境、安装Docker、部署WebSSH
@@ -19,13 +21,13 @@ set -e
 # ============================================
 # 配置变量
 # ============================================
-SCRIPT_VERSION="v2.0"
+SCRIPT_VERSION="v2.1"
 CONTAINER_NAME="webssh"
 WEBSSH_PORT=8899
 SSH_PORT=22
 SSH_USER="root"
-SSH_PASSWORD="@Cyn5762579"
-DOCKER_IMAGE="jroakes/webssh:latest"
+SSH_PASSWORD="password"
+DOCKER_IMAGE="huashengdun/webssh:latest"
 CONFIG_FILE="/etc/webssh/config.conf"
 
 # 颜色定义
@@ -221,7 +223,6 @@ deploy_webssh() {
         --name $CONTAINER_NAME \
         --restart=always \
         -p $WEBSSH_PORT:8888 \
-        -e SAVEPASS=true \
         $DOCKER_IMAGE
     
     sleep 3
@@ -230,6 +231,7 @@ deploy_webssh() {
         print_success "WebSSH服务已启动"
     else
         print_error "WebSSH服务启动失败"
+        docker logs $CONTAINER_NAME
         exit 1
     fi
     
@@ -253,14 +255,14 @@ deploy_webssh() {
     echo "  http://$SERVER_IP:$WEBSSH_PORT"
     echo ""
     echo "SSH连接参数:"
-    echo "  Hostname: 127.0.0.1"
+    echo "  Hostname: 127.0.0.1 (或您的VPS IP)"
     echo "  Port: $SSH_PORT"
     echo "  Username: $SSH_USER"
     echo "  Password: $SSH_PASSWORD"
     echo ""
     echo "管理命令:"
     echo "  再次运行此脚本进入管理菜单"
-    echo "  $0"
+    echo "  bash <(curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/vps-webssh-deploy.sh)"
     echo ""
     print_line
 }
@@ -408,7 +410,7 @@ uninstall_service() {
         fi
         
         # 删除镜像
-        if docker images | grep -q "jroakes/webssh"; then
+        if docker images | grep -q "huashengdun/webssh"; then
             docker rmi $DOCKER_IMAGE 2>/dev/null || true
             print_success "镜像已删除"
         fi

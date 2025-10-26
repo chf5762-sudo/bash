@@ -250,12 +250,13 @@ deploy_webssh() {
     
     # 根据不同镜像使用不同的启动参数
     if [[ "$DOCKER_IMAGE" == "darktohka/webssh-docker"* ]]; then
-        # darktohka 镜像的启动方式
+        # darktohka 镜像需要添加 xheaders 参数允许公网访问
         docker run -d \
             --name $CONTAINER_NAME \
             --restart=always \
             -p $WEBSSH_PORT:8080 \
-            $DOCKER_IMAGE
+            $DOCKER_IMAGE \
+            --xheaders=False
     else
         # snsyzb 镜像的启动方式
         docker run -d \
@@ -424,7 +425,8 @@ modify_config() {
                         --name $CONTAINER_NAME \
                         --restart=always \
                         -p $WEBSSH_PORT:8080 \
-                        $DOCKER_IMAGE
+                        $DOCKER_IMAGE \
+                        --xheaders=False
                 else
                     docker run -d \
                         --name $CONTAINER_NAME \

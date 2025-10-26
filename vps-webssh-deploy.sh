@@ -220,7 +220,7 @@ deploy_webssh() {
     docker run -d \
         --name $CONTAINER_NAME \
         --restart=always \
-        -p $WEBSSH_PORT:8888 \
+        -p $WEBSSH_PORT:8080 \
         -e SAVEPASS=true \
         $DOCKER_IMAGE
     

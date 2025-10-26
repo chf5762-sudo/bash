@@ -247,13 +247,25 @@ deploy_webssh() {
     
     # 5. 启动容器
     print_info "[5/7] 启动WebSSH服务..."
-    docker run -d \
-        --name $CONTAINER_NAME \
-        --restart=always \
-        -p $WEBSSH_PORT:8080 \
-        -e SAVEPASS=true \
-        $DOCKER_IMAGE \
-        wssh --address=0.0.0.0 --port=8080
+    
+    # 根据不同镜像使用不同的启动参数
+    if [[ "$DOCKER_IMAGE" == "darktohka/webssh-docker"* ]]; then
+        # darktohka 镜像的启动方式
+        docker run -d \
+            --name $CONTAINER_NAME \
+            --restart=always \
+            -p $WEBSSH_PORT:8080 \
+            $DOCKER_IMAGE
+    else
+        # snsyzb 镜像的启动方式
+        docker run -d \
+            --name $CONTAINER_NAME \
+            --restart=always \
+            -p $WEBSSH_PORT:8080 \
+            -e SAVEPASS=true \
+            $DOCKER_IMAGE \
+            wssh --address=0.0.0.0 --port=8080
+    fi
     
     sleep 3
     
@@ -405,13 +417,24 @@ modify_config() {
                 detect_architecture
                 docker stop $CONTAINER_NAME 2>/dev/null || true
                 docker rm $CONTAINER_NAME 2>/dev/null || true
-                docker run -d \
-                    --name $CONTAINER_NAME \
-                    --restart=always \
-                    -p $WEBSSH_PORT:8080 \
-                    -e SAVEPASS=true \
-                    $DOCKER_IMAGE \
-                    wssh --address=0.0.0.0 --port=8080
+                
+                # 根据镜像类型使用不同启动参数
+                if [[ "$DOCKER_IMAGE" == "darktohka/webssh-docker"* ]]; then
+                    docker run -d \
+                        --name $CONTAINER_NAME \
+                        --restart=always \
+                        -p $WEBSSH_PORT:8080 \
+                        $DOCKER_IMAGE
+                else
+                    docker run -d \
+                        --name $CONTAINER_NAME \
+                        --restart=always \
+                        -p $WEBSSH_PORT:8080 \
+                        -e SAVEPASS=true \
+                        $DOCKER_IMAGE \
+                        wssh --address=0.0.0.0 --port=8080
+                fi
+                
                 configure_firewall
                 print_success "重新部署完成"
             fi

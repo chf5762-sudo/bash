@@ -156,7 +156,16 @@ echo ""
 
 # 生成CA证书 (使用非交互模式)
 echo "步骤 7/8: 生成CA证书..."
-docker run -v ovpn-data:/etc/openvpn --rm kylemanna/openvpn ovpn_initpki nopass
+echo "正在生成CA证书，请稍候..."
+# 使用 expect 或直接传入空值来完全自动化
+docker run -v ovpn-data:/etc/openvpn --rm kylemanna/openvpn bash -c "
+echo 'OpenVPN-CA' | ovpn_initpki nopass
+"
+if [ $? -ne 0 ]; then
+    echo "⚠️  自动模式失败，切换到交互模式..."
+    echo "提示: 在 'Common Name' 提示时直接按回车使用默认值"
+    docker run -v ovpn-data:/etc/openvpn --rm -it kylemanna/openvpn ovpn_initpki nopass
+fi
 echo "✓ CA证书生成完成"
 echo ""
 

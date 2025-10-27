@@ -224,6 +224,10 @@ init_openvpn() {
         -p "route 192.168.0.0 255.255.0.0" \
         -p "route 10.0.0.0 255.0.0.0"
     
+    # 修改配置文件，确保监听正确的端口
+    docker run -v $OVPN_DATA:/etc/openvpn --rm kylemanna/openvpn bash -c "sed -i 's/port 1194/port $OVPN_PORT/g' /etc/openvpn/openvpn.conf"
+    docker run -v $OVPN_DATA:/etc/openvpn --rm kylemanna/openvpn bash -c "sed -i 's/proto udp/proto $OVPN_PROTO/g' /etc/openvpn/openvpn.conf"
+    
     # 生成CA证书（自动化，无需交互）
     docker run -v $OVPN_DATA:/etc/openvpn --rm -e EASYRSA_BATCH=1 kylemanna/openvpn ovpn_initpki nopass
     
@@ -496,6 +500,8 @@ EOF
 test_openvpn() {
     print_info "测试OpenVPN服务..."
     
+    sleep 5  # 等待服务完全启动
+    
     if docker exec $CONTAINER_NAME ps aux | grep -q openvpn; then
         print_success "OpenVPN进程运行正常"
     else
@@ -503,10 +509,22 @@ test_openvpn() {
         return 1
     fi
     
-    if docker exec $CONTAINER_NAME netstat -tuln | grep -q ":$OVPN_PORT"; then
+    # 在Host网络模式下，直接在宿主机检查端口
+    if netstat -tuln | grep -q ":$OVPN_PORT "; then
         print_success "端口 $OVPN_PORT 监听正常"
     else
-        print_error "端口监听异常"
+        print_warning "端口 $OVPN_PORT 监听检测失败，正在检查容器配置..."
+        
+        # 显示配置文件内容
+        echo ""
+        print_info "当前OpenVPN配置："
+        docker run -v $OVPN_DATA:/etc/openvpn --rm kylemanna/openvpn cat /etc/openvpn/openvpn.conf | grep -E "port|proto"
+        
+        # 显示容器日志
+        echo ""
+        print_info "容器日志（最后20行）："
+        docker logs --tail 20 $CONTAINER_NAME
+        
         return 1
     fi
 }

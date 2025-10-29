@@ -151,6 +151,30 @@ while IFS= read -r url; do
     
     urls+=("$url")
 done < "$URL_FILE"
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/ads.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/applications.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/private.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/microsoft-cn.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/apple-cn.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/google-cn.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/games-cn.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/fakeip-filter.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/netflix.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/disney.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/max.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/primevideo.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/appletv.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/youtube.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/tiktok.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/bilibili.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/ai.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/networktest.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/proxy.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/cn.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/netflixip.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/telegramip.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/privateip.srs
+https://raw.githubusercontent.com/DustinWin/ruleset_geodata/sing-box-ruleset/cnip.srs
 
 # 检查是否成功读取 URL 文件
 if [ ${#urls[@]} -eq 0 ]; then

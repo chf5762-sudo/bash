@@ -379,11 +379,21 @@ confirm_install() {
             echo "  4. 将此节点配置为 Exit Node"
         fi
         echo ""
-        read -p "确认继续安装？ (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "安装已取消"
-            exit 0
+        
+        # 检查是否在交互式终端中
+        if [[ -t 0 ]]; then
+            read -p "确认继续安装？ (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                print_info "安装已取消"
+                exit 0
+            fi
+        else
+            print_warn "检测到非交互式模式（管道输入）"
+            print_warn "请使用 '-y' 参数跳过确认，或下载脚本后直接执行"
+            print_error "用法: curl ... | bash -s -- -y"
+            print_error "或者: curl -o script.sh ... && chmod +x script.sh && ./script.sh"
+            exit 1
         fi
     fi
 }

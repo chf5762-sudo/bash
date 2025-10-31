@@ -1,303 +1,430 @@
 #!/bin/bash
 
-#######################################################
-# 文件名: socks5_deploy_vps1.sh
-# 版本号: v1.0
-# 功能: 在VPS1上一键部署无认证SOCKS5代理
-# 作者: Auto Generated
-# 日期: 2025-10-31
-#######################################################
+# ========================================
+# WireGuard Docker 一键部署脚本
+# 使用 host 网络模式，端口 8000
+# ========================================
 
 set -e
 
-# 配置变量
-SOCKS5_PORT=5009
-CONTAINER_NAME="socks5-proxy"
-IMAGE_NAME="serjs/go-socks5-proxy"
-VPS_DOMAIN="vps1.chf5762.cloudns.org"
-
-# 颜色输出
+# 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${GREEN}================================${NC}"
-echo -e "${GREEN}SOCKS5 代理部署脚本 v1.0${NC}"
-echo -e "${GREEN}VPS: ${VPS_DOMAIN}${NC}"
-echo -e "${GREEN}================================${NC}\n"
+# 默认配置
+WG_PORT=8000
+WG_PEERS=5
+WG_DIR="/opt/wireguard"
+CONTAINER_NAME="wireguard"
+TIMEZONE="Asia/Singapore"
+SERVER_URL=""
+CONFIRM=false
 
-# 检查是否为root用户
+# 打印函数
+print_info() {
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+print_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+# 显示帮助
+show_help() {
+    cat << EOF
+WireGuard Docker 一键部署脚本 (Host 模式)
+
+用法: $0 [选项]
+
+选项:
+  -y, --yes               跳过确认提示
+  -p, --port PORT         WireGuard 端口 (默认: 8000)
+  -n, --peers NUM         客户端数量 (默认: 5)
+  -u, --url URL           服务器公网 IP 或域名 (不填自动检测)
+  -d, --dir PATH          配置文件目录 (默认: /opt/wireguard)
+  -t, --timezone TZ       时区 (默认: Asia/Singapore)
+  -h, --help              显示帮助信息
+
+示例:
+  $0                                          # 交互式安装
+  $0 -y                                       # 自动安装
+  $0 -y -p 51820 -n 10                       # 自定义端口和客户端数
+  $0 -y -u vpn.example.com                   # 指定域名
+  $0 -y -p 8000 -u 1.2.3.4                   # 指定 IP 和端口
+
+EOF
+}
+
+# 解析参数
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -y|--yes)
+                CONFIRM=true
+                shift
+                ;;
+            -p|--port)
+                WG_PORT="$2"
+                shift 2
+                ;;
+            -n|--peers)
+                WG_PEERS="$2"
+                shift 2
+                ;;
+            -u|--url)
+                SERVER_URL="$2"
+                shift 2
+                ;;
+            -d|--dir)
+                WG_DIR="$2"
+                shift 2
+                ;;
+            -t|--timezone)
+                TIMEZONE="$2"
+                shift 2
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                print_error "未知参数: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# 检查 root 权限
 check_root() {
-    if [ "$EUID" -ne 0 ]; then 
-        echo -e "${RED}请使用 root 用户运行此脚本${NC}"
+    if [[ $EUID -ne 0 ]]; then
+        print_error "此脚本需要 root 权限运行"
         exit 1
     fi
 }
 
-# 检查系统环境
-check_system() {
-    echo -e "${YELLOW}[1/6] 检查系统环境...${NC}"
+# 检查 Docker
+check_docker() {
+    print_info "检查 Docker..."
     
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS=$ID
-        echo -e "${GREEN}检测到系统: $OS${NC}"
+    if ! command -v docker &> /dev/null; then
+        print_warn "Docker 未安装，正在安装..."
+        install_docker
     else
-        echo -e "${RED}无法识别操作系统${NC}"
-        exit 1
+        print_info "Docker 已安装: $(docker --version)"
     fi
-}
-
-# 安装Docker
-install_docker() {
-    echo -e "${YELLOW}[2/6] 检查并安装 Docker...${NC}"
     
-    if command -v docker &> /dev/null; then
-        echo -e "${GREEN}Docker 已安装${NC}"
-        docker --version
-    else
-        echo -e "${YELLOW}开始安装 Docker...${NC}"
-        
-        # 卸载旧版本
-        apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-        
-        # 更新包索引
-        apt-get update
-        
-        # 安装依赖
-        apt-get install -y \
-            ca-certificates \
-            curl \
-            gnupg \
-            lsb-release
-        
-        # 添加Docker官方GPG密钥
-        mkdir -p /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-        
-        # 设置仓库
-        echo \
-          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-          $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-        
-        # 安装Docker Engine
-        apt-get update
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-        
-        # 启动Docker
+    # 检查 Docker 服务
+    if ! systemctl is-active --quiet docker; then
+        print_info "启动 Docker 服务..."
         systemctl start docker
         systemctl enable docker
-        
-        echo -e "${GREEN}Docker 安装完成${NC}"
     fi
+}
+
+# 安装 Docker
+install_docker() {
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        case "$ID" in
+            ubuntu|debian)
+                apt-get update
+                apt-get install -y ca-certificates curl gnupg
+                install -m 0755 -d /etc/apt/keyrings
+                curl -fsSL https://download.docker.com/linux/$ID/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+                chmod a+r /etc/apt/keyrings/docker.gpg
+                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID $(lsb_release -cs) stable" | \
+                    tee /etc/apt/sources.list.d/docker.list > /dev/null
+                apt-get update
+                apt-get install -y docker-ce docker-ce-cli containerd.io
+                ;;
+            centos|rhel|fedora)
+                yum install -y yum-utils
+                yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                yum install -y docker-ce docker-ce-cli containerd.io
+                ;;
+            *)
+                print_error "不支持的操作系统: $ID"
+                exit 1
+                ;;
+        esac
+        
+        systemctl start docker
+        systemctl enable docker
+        print_success "Docker 安装完成"
+    fi
+}
+
+# 获取公网 IP
+get_public_ip() {
+    if [[ -n "$SERVER_URL" ]]; then
+        print_info "使用指定的服务器地址: $SERVER_URL"
+        return
+    fi
+    
+    print_info "检测公网 IP..."
+    
+    # 尝试多个服务
+    SERVER_URL=$(curl -s --max-time 5 https://api.ipify.org || \
+                 curl -s --max-time 5 https://ifconfig.me || \
+                 curl -s --max-time 5 https://icanhazip.com)
+    
+    if [[ -z "$SERVER_URL" ]]; then
+        print_warn "无法自动检测公网 IP"
+        read -p "请手动输入服务器公网 IP 或域名: " SERVER_URL
+        if [[ -z "$SERVER_URL" ]]; then
+            print_error "服务器地址不能为空"
+            exit 1
+        fi
+    else
+        print_info "检测到公网 IP: $SERVER_URL"
+    fi
+}
+
+# 检查端口占用
+check_port() {
+    if ss -tuln | grep -q ":$WG_PORT "; then
+        print_error "端口 $WG_PORT 已被占用"
+        ss -tuln | grep ":$WG_PORT"
+        exit 1
+    fi
+    print_info "端口 $WG_PORT 可用"
 }
 
 # 配置防火墙
 configure_firewall() {
-    echo -e "${YELLOW}[3/6] 配置防火墙...${NC}"
+    print_info "配置防火墙..."
     
-    if command -v ufw &> /dev/null; then
-        ufw allow ${SOCKS5_PORT}/tcp
-        echo -e "${GREEN}UFW 防火墙规则已添加${NC}"
+    # UFW (Ubuntu)
+    if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
+        print_info "配置 UFW..."
+        ufw allow $WG_PORT/udp comment 'WireGuard' || true
+        print_info "UFW 规则已添加"
     fi
     
-    if command -v firewall-cmd &> /dev/null; then
-        firewall-cmd --permanent --add-port=${SOCKS5_PORT}/tcp
-        firewall-cmd --reload
-        echo -e "${GREEN}Firewalld 防火墙规则已添加${NC}"
+    # firewalld (CentOS/RHEL)
+    if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
+        print_info "配置 firewalld..."
+        firewall-cmd --permanent --add-port=$WG_PORT/udp || true
+        firewall-cmd --reload || true
+        print_info "firewalld 规则已添加"
+    fi
+    
+    # iptables (通用)
+    if ! iptables -C INPUT -p udp --dport $WG_PORT -j ACCEPT 2>/dev/null; then
+        iptables -I INPUT -p udp --dport $WG_PORT -j ACCEPT
+        print_info "iptables 规则已添加"
     fi
 }
 
-# 部署SOCKS5代理
-deploy_socks5() {
-    echo -e "${YELLOW}[4/6] 部署 SOCKS5 代理...${NC}"
+# 启用 IP 转发
+enable_ip_forward() {
+    print_info "启用 IP 转发..."
     
-    # 停止并删除旧容器
-    if docker ps -a | grep -q ${CONTAINER_NAME}; then
-        echo -e "${YELLOW}删除旧容器...${NC}"
-        docker stop ${CONTAINER_NAME} 2>/dev/null || true
-        docker rm ${CONTAINER_NAME} 2>/dev/null || true
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null
+    
+    # 持久化
+    if [[ ! -f /etc/sysctl.d/99-wireguard.conf ]]; then
+        cat > /etc/sysctl.d/99-wireguard.conf << EOF
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+EOF
+        sysctl -p /etc/sysctl.d/99-wireguard.conf >/dev/null
     fi
     
-    # 拉取镜像
-    echo -e "${YELLOW}拉取 Docker 镜像...${NC}"
-    docker pull ${IMAGE_NAME}
+    print_info "IP 转发已启用"
+}
+
+# 停止并删除旧容器
+cleanup_old_container() {
+    if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        print_warn "发现已存在的容器，正在删除..."
+        docker stop $CONTAINER_NAME 2>/dev/null || true
+        docker rm $CONTAINER_NAME 2>/dev/null || true
+        print_info "旧容器已删除"
+    fi
+}
+
+# 创建配置目录
+create_config_dir() {
+    print_info "创建配置目录: $WG_DIR"
+    mkdir -p "$WG_DIR/config"
+    chmod 755 "$WG_DIR"
+}
+
+# 启动 WireGuard 容器
+start_wireguard() {
+    print_info "启动 WireGuard 容器..."
     
-    # 启动容器
-    echo -e "${YELLOW}启动 SOCKS5 容器...${NC}"
     docker run -d \
-        --name ${CONTAINER_NAME} \
-        --restart=always \
-        -p ${SOCKS5_PORT}:1080 \
-        ${IMAGE_NAME}
+        --name=$CONTAINER_NAME \
+        --cap-add=NET_ADMIN \
+        --cap-add=SYS_MODULE \
+        --network=host \
+        -e PUID=1000 \
+        -e PGID=1000 \
+        -e TZ=$TIMEZONE \
+        -e SERVERURL=$SERVER_URL \
+        -e SERVERPORT=$WG_PORT \
+        -e PEERS=$WG_PEERS \
+        -e PEERDNS=auto \
+        -e INTERNAL_SUBNET=10.13.13.0 \
+        -e ALLOWEDIPS=0.0.0.0/0,::/0 \
+        -e PERSISTENTKEEPALIVE_PEERS=25 \
+        -e LOG_CONFS=true \
+        -v $WG_DIR/config:/config \
+        -v /lib/modules:/lib/modules:ro \
+        --sysctl="net.ipv4.conf.all.src_valid_mark=1" \
+        --restart unless-stopped \
+        lscr.io/linuxserver/wireguard:latest
     
-    echo -e "${GREEN}SOCKS5 代理部署完成${NC}"
+    print_success "WireGuard 容器已启动"
 }
 
-# 测试连接
-test_connection() {
-    echo -e "${YELLOW}[5/6] 测试代理连接...${NC}"
+# 等待容器初始化
+wait_for_container() {
+    print_info "等待容器初始化（这可能需要几秒钟）..."
+    sleep 5
     
-    sleep 3
-    
-    if docker ps | grep -q ${CONTAINER_NAME}; then
-        echo -e "${GREEN}✓ 容器运行正常${NC}"
-        
-        # 测试端口
-        if netstat -tunlp | grep -q ":${SOCKS5_PORT}"; then
-            echo -e "${GREEN}✓ 端口 ${SOCKS5_PORT} 已开放${NC}"
-        else
-            echo -e "${RED}✗ 端口 ${SOCKS5_PORT} 未开放${NC}"
-        fi
-    else
-        echo -e "${RED}✗ 容器启动失败${NC}"
-        docker logs ${CONTAINER_NAME}
+    # 检查容器状态
+    if ! docker ps | grep -q $CONTAINER_NAME; then
+        print_error "容器启动失败"
+        docker logs $CONTAINER_NAME
         exit 1
     fi
-}
-
-# 生成管理脚本
-create_management_script() {
-    echo -e "${YELLOW}[6/6] 生成管理脚本...${NC}"
     
-    cat > /usr/local/bin/socks5-manage << 'EOF'
-#!/bin/bash
-
-CONTAINER_NAME="socks5-proxy"
-SOCKS5_PORT=5009
-VPS_DOMAIN="vps1.chf5762.cloudns.org"
-
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-show_menu() {
-    clear
-    echo -e "${GREEN}================================${NC}"
-    echo -e "${GREEN}  SOCKS5 代理管理菜单${NC}"
-    echo -e "${GREEN}================================${NC}"
-    echo -e "1. 启动代理"
-    echo -e "2. 停止代理"
-    echo -e "3. 重启代理"
-    echo -e "4. 查看状态"
-    echo -e "5. 查看日志"
-    echo -e "6. 查看连接信息"
-    echo -e "7. 卸载代理"
-    echo -e "0. 退出"
-    echo -e "${GREEN}================================${NC}"
-}
-
-start_proxy() {
-    echo -e "${YELLOW}启动代理...${NC}"
-    docker start ${CONTAINER_NAME}
-    echo -e "${GREEN}代理已启动${NC}"
-}
-
-stop_proxy() {
-    echo -e "${YELLOW}停止代理...${NC}"
-    docker stop ${CONTAINER_NAME}
-    echo -e "${GREEN}代理已停止${NC}"
-}
-
-restart_proxy() {
-    echo -e "${YELLOW}重启代理...${NC}"
-    docker restart ${CONTAINER_NAME}
-    echo -e "${GREEN}代理已重启${NC}"
-}
-
-show_status() {
-    echo -e "${YELLOW}代理状态:${NC}"
-    docker ps -a | grep ${CONTAINER_NAME}
-    echo -e "\n${YELLOW}端口监听:${NC}"
-    netstat -tunlp | grep ${SOCKS5_PORT} || echo "端口未监听"
-}
-
-show_logs() {
-    echo -e "${YELLOW}最近日志:${NC}"
-    docker logs --tail 50 ${CONTAINER_NAME}
-}
-
-show_connection_info() {
-    echo -e "${GREEN}================================${NC}"
-    echo -e "${GREEN}  SOCKS5 连接信息${NC}"
-    echo -e "${GREEN}================================${NC}"
-    echo -e "服务器地址: ${VPS_DOMAIN}"
-    echo -e "端口: ${SOCKS5_PORT}"
-    echo -e "协议: SOCKS5"
-    echo -e "认证: 无"
-    echo -e ""
-    echo -e "客户端配置示例:"
-    echo -e "  地址: ${VPS_DOMAIN}:${SOCKS5_PORT}"
-    echo -e "  用户名: (留空)"
-    echo -e "  密码: (留空)"
-    echo -e "${GREEN}================================${NC}"
-}
-
-uninstall_proxy() {
-    read -p "确认卸载 SOCKS5 代理? (y/n): " confirm
-    if [ "$confirm" = "y" ]; then
-        echo -e "${YELLOW}卸载代理...${NC}"
-        docker stop ${CONTAINER_NAME} 2>/dev/null || true
-        docker rm ${CONTAINER_NAME} 2>/dev/null || true
-        docker rmi serjs/go-socks5-proxy 2>/dev/null || true
-        rm -f /usr/local/bin/socks5-manage
-        echo -e "${GREEN}卸载完成${NC}"
-        exit 0
+    # 等待配置文件生成
+    local count=0
+    while [[ ! -f "$WG_DIR/config/peer1/peer1.conf" ]] && [[ $count -lt 30 ]]; do
+        sleep 1
+        ((count++))
+    done
+    
+    if [[ -f "$WG_DIR/config/peer1/peer1.conf" ]]; then
+        print_success "配置文件生成完成"
+    else
+        print_warn "配置文件生成可能需要更长时间，请稍后检查"
     fi
 }
 
-while true; do
-    show_menu
-    read -p "请选择操作 [0-7]: " choice
-    case $choice in
-        1) start_proxy ;;
-        2) stop_proxy ;;
-        3) restart_proxy ;;
-        4) show_status ;;
-        5) show_logs ;;
-        6) show_connection_info ;;
-        7) uninstall_proxy ;;
-        0) exit 0 ;;
-        *) echo -e "${RED}无效选择${NC}" ;;
-    esac
-    read -p "按回车继续..."
-done
-EOF
-
-    chmod +x /usr/local/bin/socks5-manage
-    echo -e "${GREEN}管理脚本已创建: /usr/local/bin/socks5-manage${NC}"
+# 显示配置信息
+show_config() {
+    echo ""
+    echo "======================================"
+    print_success "WireGuard 部署完成！"
+    echo "======================================"
+    echo ""
+    print_info "服务器信息："
+    echo "  地址: $SERVER_URL"
+    echo "  端口: $WG_PORT"
+    echo "  客户端数量: $WG_PEERS"
+    echo "  配置目录: $WG_DIR/config"
+    echo ""
+    print_info "客户端配置文件位置："
+    for i in $(seq 1 $WG_PEERS); do
+        if [[ -d "$WG_DIR/config/peer$i" ]]; then
+            echo "  Peer $i: $WG_DIR/config/peer$i/"
+        fi
+    done
+    echo ""
+    print_info "查看 QR 码（在手机上扫描）："
+    echo "  docker exec -it $CONTAINER_NAME /app/show-peer 1"
+    echo ""
+    print_info "常用命令："
+    echo "  查看日志: docker logs -f $CONTAINER_NAME"
+    echo "  重启容器: docker restart $CONTAINER_NAME"
+    echo "  停止容器: docker stop $CONTAINER_NAME"
+    echo "  启动容器: docker start $CONTAINER_NAME"
+    echo "  查看状态: docker ps | grep $CONTAINER_NAME"
+    echo "  进入容器: docker exec -it $CONTAINER_NAME bash"
+    echo ""
+    print_info "客户端配置："
+    echo "  1. 电脑客户端: 复制 $WG_DIR/config/peer1/peer1.conf 文件"
+    echo "  2. 手机客户端: 扫描 QR 码或导入配置文件"
+    echo ""
+    
+    # 显示第一个客户端的 QR 码
+    if [[ -f "$WG_DIR/config/peer1/peer1.png" ]]; then
+        print_info "Peer 1 QR 码已生成: $WG_DIR/config/peer1/peer1.png"
+        echo ""
+        print_warn "在终端显示 QR 码："
+        docker exec $CONTAINER_NAME /app/show-peer 1 2>/dev/null || echo "  (请稍后运行上面的命令)"
+    fi
+    
+    echo ""
+    print_info "配置文件内容预览 (Peer 1):"
+    if [[ -f "$WG_DIR/config/peer1/peer1.conf" ]]; then
+        echo "  ----------------------------------------"
+        cat "$WG_DIR/config/peer1/peer1.conf" | sed 's/^/  /'
+        echo "  ----------------------------------------"
+    fi
 }
 
-# 显示部署信息
-show_info() {
-    echo -e "\n${GREEN}================================${NC}"
-    echo -e "${GREEN}  部署完成！${NC}"
-    echo -e "${GREEN}================================${NC}"
-    echo -e "服务器地址: ${VPS_DOMAIN}"
-    echo -e "端口: ${SOCKS5_PORT}"
-    echo -e "协议: SOCKS5"
-    echo -e "认证: 无需用户名密码"
-    echo -e ""
-    echo -e "${YELLOW}客户端配置:${NC}"
-    echo -e "  ${VPS_DOMAIN}:${SOCKS5_PORT}"
-    echo -e ""
-    echo -e "${YELLOW}管理命令:${NC}"
-    echo -e "  socks5-manage    # 打开管理菜单"
-    echo -e "${GREEN}================================${NC}\n"
+# 确认安装
+confirm_install() {
+    if [[ "$CONFIRM" == "false" ]]; then
+        echo ""
+        print_warn "即将部署 WireGuard Docker 容器，配置如下："
+        echo "  服务器地址: ${SERVER_URL:-自动检测}"
+        echo "  监听端口: $WG_PORT (UDP)"
+        echo "  客户端数量: $WG_PEERS"
+        echo "  配置目录: $WG_DIR"
+        echo "  网络模式: host"
+        echo "  时区: $TIMEZONE"
+        echo ""
+        
+        if [[ -t 0 ]]; then
+            read -p "确认继续？ (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                print_info "安装已取消"
+                exit 0
+            fi
+        else
+            print_warn "检测到非交互式模式，请使用 -y 参数"
+            exit 1
+        fi
+    fi
 }
 
-# 主流程
+# 主函数
 main() {
+    echo "======================================"
+    echo "  WireGuard Docker 一键部署脚本"
+    echo "  Network Mode: Host"
+    echo "======================================"
+    echo ""
+    
+    parse_args "$@"
     check_root
-    check_system
-    install_docker
+    get_public_ip
+    confirm_install
+    
+    check_docker
+    check_port
+    enable_ip_forward
     configure_firewall
-    deploy_socks5
-    test_connection
-    create_management_script
-    show_info
+    cleanup_old_container
+    create_config_dir
+    start_wireguard
+    wait_for_container
+    show_config
+    
+    echo ""
+    print_success "部署完成！请使用客户端配置文件连接 VPN"
 }
 
-main
+main "$@"

@@ -1,9 +1,10 @@
 #!/bin/bash
-
-# ========================================
-# WireGuard Docker 一键部署脚本
-# 使用 host 网络模式，端口 8000
-# ========================================
+# WireGuard Docker 一键部署脚本 (Host 网络模式)
+# 自动配置宿主机系统参数和 Docker 容器
+# 
+# 使用方法:
+# curl -sL https://你的GitHub地址/wireguard-docker.sh | sudo bash -s -- -y
+# curl -sL https://你的GitHub地址/wireguard-docker.sh | sudo bash -s -- -y -p 8000 -n 10
 
 set -e
 
@@ -203,6 +204,62 @@ check_port() {
     print_info "端口 $WG_PORT 可用"
 }
 
+# 配置宿主机系统参数（关键修改）
+configure_host_sysctl() {
+    print_info "配置宿主机系统参数..."
+    
+    local sysctl_conf="/etc/sysctl.d/99-wireguard.conf"
+    
+    # 创建或更新 sysctl 配置文件
+    cat > "$sysctl_conf" << EOF
+# WireGuard 所需的系统参数
+# 由 WireGuard Docker 安装脚本自动生成
+
+# IP 转发 (必需)
+net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1
+
+# WireGuard 路由标记 (Host 模式必需)
+net.ipv4.conf.all.src_valid_mark = 1
+
+# 网络优化参数
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+
+# 防止 SYN flood 攻击
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 8192
+
+# 增加连接跟踪表大小
+net.netfilter.nf_conntrack_max = 262144
+EOF
+    
+    # 应用配置
+    print_info "应用系统参数..."
+    if sysctl -p "$sysctl_conf" >/dev/null 2>&1; then
+        print_success "系统参数配置完成"
+    else
+        print_warn "部分系统参数配置失败（可能是因为内核模块未加载）"
+        print_info "关键参数已设置，容器仍可正常运行"
+    fi
+    
+    # 验证关键参数
+    print_info "验证关键参数..."
+    local ip_forward=$(sysctl -n net.ipv4.ip_forward)
+    local src_valid_mark=$(sysctl -n net.ipv4.conf.all.src_valid_mark)
+    
+    if [[ "$ip_forward" == "1" ]] && [[ "$src_valid_mark" == "1" ]]; then
+        print_success "关键参数验证通过 ✓"
+        echo "  net.ipv4.ip_forward = $ip_forward"
+        echo "  net.ipv4.conf.all.src_valid_mark = $src_valid_mark"
+    else
+        print_error "关键参数设置失败"
+        echo "  net.ipv4.ip_forward = $ip_forward (需要: 1)"
+        echo "  net.ipv4.conf.all.src_valid_mark = $src_valid_mark (需要: 1)"
+        exit 1
+    fi
+}
+
 # 配置防火墙
 configure_firewall() {
     print_info "配置防火墙..."
@@ -229,25 +286,6 @@ configure_firewall() {
     fi
 }
 
-# 启用 IP 转发
-enable_ip_forward() {
-    print_info "启用 IP 转发..."
-    
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null
-    sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null
-    
-    # 持久化
-    if [[ ! -f /etc/sysctl.d/99-wireguard.conf ]]; then
-        cat > /etc/sysctl.d/99-wireguard.conf << EOF
-net.ipv4.ip_forward = 1
-net.ipv6.conf.all.forwarding = 1
-EOF
-        sysctl -p /etc/sysctl.d/99-wireguard.conf >/dev/null
-    fi
-    
-    print_info "IP 转发已启用"
-}
-
 # 停止并删除旧容器
 cleanup_old_container() {
     if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
@@ -265,9 +303,9 @@ create_config_dir() {
     chmod 755 "$WG_DIR"
 }
 
-# 启动 WireGuard 容器
+# 启动 WireGuard 容器（关键修改：移除 --sysctl 参数）
 start_wireguard() {
-    print_info "启动 WireGuard 容器..."
+    print_info "启动 WireGuard 容器 (Host 网络模式)..."
     
     docker run -d \
         --name=$CONTAINER_NAME \
@@ -287,7 +325,6 @@ start_wireguard() {
         -e LOG_CONFS=true \
         -v $WG_DIR/config:/config \
         -v /lib/modules:/lib/modules:ro \
-        --sysctl="net.ipv4.conf.all.src_valid_mark=1" \
         --restart unless-stopped \
         lscr.io/linuxserver/wireguard:latest
     
@@ -301,7 +338,7 @@ wait_for_container() {
     
     # 检查容器状态
     if ! docker ps | grep -q $CONTAINER_NAME; then
-        print_error "容器启动失败"
+        print_error "容器启动失败，查看日志..."
         docker logs $CONTAINER_NAME
         exit 1
     fi
@@ -329,7 +366,8 @@ show_config() {
     echo ""
     print_info "服务器信息："
     echo "  地址: $SERVER_URL"
-    echo "  端口: $WG_PORT"
+    echo "  端口: $WG_PORT (UDP)"
+    echo "  网络模式: Host"
     echo "  客户端数量: $WG_PEERS"
     echo "  配置目录: $WG_DIR/config"
     echo ""
@@ -371,6 +409,12 @@ show_config() {
         cat "$WG_DIR/config/peer1/peer1.conf" | sed 's/^/  /'
         echo "  ----------------------------------------"
     fi
+    
+    echo ""
+    print_info "宿主机系统配置："
+    echo "  配置文件: /etc/sysctl.d/99-wireguard.conf"
+    echo "  IP 转发: $(sysctl -n net.ipv4.ip_forward)"
+    echo "  路由标记: $(sysctl -n net.ipv4.conf.all.src_valid_mark)"
 }
 
 # 确认安装
@@ -382,8 +426,12 @@ confirm_install() {
         echo "  监听端口: $WG_PORT (UDP)"
         echo "  客户端数量: $WG_PEERS"
         echo "  配置目录: $WG_DIR"
-        echo "  网络模式: host"
+        echo "  网络模式: host (高性能)"
         echo "  时区: $TIMEZONE"
+        echo ""
+        print_info "将修改宿主机配置："
+        echo "  - /etc/sysctl.d/99-wireguard.conf (系统参数)"
+        echo "  - 防火墙规则 (允许端口 $WG_PORT)"
         echo ""
         
         if [[ -t 0 ]]; then
@@ -404,7 +452,8 @@ confirm_install() {
 main() {
     echo "======================================"
     echo "  WireGuard Docker 一键部署脚本"
-    echo "  Network Mode: Host"
+    echo "  Network Mode: Host (高性能)"
+    echo "  自动配置宿主机和容器"
     echo "======================================"
     echo ""
     
@@ -415,16 +464,17 @@ main() {
     
     check_docker
     check_port
-    enable_ip_forward
+    configure_host_sysctl    # 关键步骤：先配置宿主机
     configure_firewall
     cleanup_old_container
     create_config_dir
-    start_wireguard
+    start_wireguard          # 然后启动容器（不带 --sysctl）
     wait_for_container
     show_config
     
     echo ""
     print_success "部署完成！请使用客户端配置文件连接 VPN"
+    print_info "系统参数已持久化，重启后自动生效"
 }
 
 main "$@"

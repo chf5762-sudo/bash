@@ -2,10 +2,10 @@
 
 ################################################################################
 #
-# Caddy 交互式多服务管理脚本 v2.1 (修复版)
+# Caddy 交互式多服务管理脚本 v2.2 (管道执行修复版)
 # 
 # 功能：自动安装 Caddy，管理多个服务的 HTTPS 反向代理
-# 修复：第 871 行语法错误 + 优化端口检测逻辑
+# 修复：支持 curl | bash 管道执行，不会立即退出
 # 更新：2025-11-11
 #
 ################################################################################
@@ -30,6 +30,31 @@ ARCH=""
 PACKAGE_MANAGER=""
 FIREWALL_TYPE=""
 HAS_SYSTEMD=false
+IS_INTERACTIVE=false
+
+# ============================================
+# 检测是否为交互式终端
+# ============================================
+check_interactive() {
+    if [ -t 0 ]; then
+        IS_INTERACTIVE=true
+    else
+        IS_INTERACTIVE=false
+    fi
+}
+
+# ============================================
+# 智能等待函数（仅交互模式等待）
+# ============================================
+smart_wait() {
+    local message="${1:-按 Enter 继续...}"
+    if $IS_INTERACTIVE; then
+        read -p "$message"
+    else
+        echo "[自动模式] 2 秒后继续..."
+        sleep 2
+    fi
+}
 
 # ============================================
 # 日志函数
@@ -66,10 +91,14 @@ show_logo() {
     clear
     echo -e "${GREEN}"
     echo "╔════════════════════════════════════════╗"
-    echo "║     Caddy 多服务管理脚本 v2.1         ║"
+    echo "║     Caddy 多服务管理脚本 v2.2         ║"
     echo "║      完整环境检查 + 冲突检测          ║"
     echo "╚════════════════════════════════════════╝"
     echo -e "${NC}"
+    
+    if ! $IS_INTERACTIVE; then
+        echo -e "${YELLOW}[检测到非交互式模式 - 自动执行]${NC}\n"
+    fi
 }
 
 # ============================================
@@ -210,9 +239,15 @@ check_port_conflicts() {
             echo -e "  ${YELLOW}- $conflict${NC}"
         done
         echo ""
-        read -p "是否继续？可能需要停止冲突服务 (y/n): " choice
-        if [[ ! $choice =~ ^[Yy]$ ]]; then
-            exit 0
+        
+        if $IS_INTERACTIVE; then
+            read -p "是否继续？可能需要停止冲突服务 (y/n): " choice
+            if [[ ! $choice =~ ^[Yy]$ ]]; then
+                exit 0
+            fi
+        else
+            warning_msg "自动模式：跳过冲突检查，继续执行"
+            sleep 2
         fi
     else
         success_msg "端口 80 和 443 可用"
@@ -255,11 +290,17 @@ check_web_servers() {
         echo "  1. 停止其他服务: systemctl stop nginx apache2"
         echo "  2. 禁用自启动: systemctl disable nginx apache2"
         echo ""
-        read -p "是否自动停止并禁用这些服务? (y/n): " choice
-        if [[ $choice =~ ^[Yy]$ ]]; then
-            systemctl stop nginx apache2 httpd 2>/dev/null || true
-            systemctl disable nginx apache2 httpd 2>/dev/null || true
-            success_msg "已停止其他 Web 服务器"
+        
+        if $IS_INTERACTIVE; then
+            read -p "是否自动停止并禁用这些服务? (y/n): " choice
+            if [[ $choice =~ ^[Yy]$ ]]; then
+                systemctl stop nginx apache2 httpd 2>/dev/null || true
+                systemctl disable nginx apache2 httpd 2>/dev/null || true
+                success_msg "已停止其他 Web 服务器"
+            fi
+        else
+            warning_msg "自动模式：跳过 Web 服务器冲突处理"
+            sleep 1
         fi
     else
         success_msg "未检测到冲突的 Web 服务器"
@@ -330,7 +371,7 @@ full_environment_check() {
     echo -e "  systemd: $HAS_SYSTEMD"
     echo ""
     
-    read -p "按 Enter 继续..." 
+    smart_wait
 }
 
 # ============================================
@@ -343,8 +384,15 @@ install_caddy() {
     if command -v caddy &> /dev/null; then
         local version=$(caddy version 2>/dev/null | head -1)
         success_msg "Caddy 已安装: $version"
-        read -p "是否重新安装? (y/n): " choice
-        if [[ ! $choice =~ ^[Yy]$ ]]; then
+        
+        if $IS_INTERACTIVE; then
+            read -p "是否重新安装? (y/n): " choice
+            if [[ ! $choice =~ ^[Yy]$ ]]; then
+                return
+            fi
+        else
+            info_msg "自动模式：跳过重新安装"
+            sleep 1
             return
         fi
     fi
@@ -410,7 +458,7 @@ install_caddy() {
     fi
     
     echo ""
-    read -p "按 Enter 继续..."
+    smart_wait
 }
 
 # ============================================
@@ -430,9 +478,13 @@ configure_firewall() {
             ufw allow 443/tcp comment 'Caddy HTTPS' 2>/dev/null || true
             if ! ufw status | grep -q "Status: active"; then
                 echo ""
-                read -p "UFW 未启用，是否启用? (y/n): " choice
-                if [[ $choice =~ ^[Yy]$ ]]; then
-                    ufw --force enable
+                if $IS_INTERACTIVE; then
+                    read -p "UFW 未启用，是否启用? (y/n): " choice
+                    if [[ $choice =~ ^[Yy]$ ]]; then
+                        ufw --force enable
+                    fi
+                else
+                    info_msg "自动模式：不自动启用 UFW"
                 fi
             fi
             success_msg "UFW 规则已添加"
@@ -448,7 +500,6 @@ configure_firewall() {
         iptables)
             iptables -A INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
             iptables -A INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
-            # 尝试保存规则
             if command -v netfilter-persistent &> /dev/null; then
                 netfilter-persistent save 2>/dev/null || true
             elif command -v iptables-save &> /dev/null; then
@@ -465,6 +516,12 @@ configure_firewall() {
 add_service() {
     show_logo
     echo -e "${CYAN}==================== 添加服务 ====================${NC}\n"
+    
+    if ! $IS_INTERACTIVE; then
+        warning_msg "非交互模式无法添加服务，请使用交互式终端"
+        sleep 2
+        return
+    fi
     
     # 备份配置
     if [ -f "$CADDYFILE" ]; then
@@ -510,14 +567,13 @@ add_service() {
             error_exit "端口不能为空"
         fi
         
-        # 检查端口是否被占用 (修复的部分)
+        # 检查端口是否被占用
         if ss -tunlp 2>/dev/null | grep -q ":$custom_port " || netstat -tunlp 2>/dev/null | grep -q ":$custom_port "; then
             warning_msg "端口 $custom_port 已被占用"
             echo ""
             echo -e "${CYAN}占用详情:${NC}"
             ss -tunlp 2>/dev/null | grep ":$custom_port " || netstat -tunlp 2>/dev/null | grep ":$custom_port " || true
             
-            # 尝试提取进程信息
             local process_info=$(ss -tunlp 2>/dev/null | grep ":$custom_port " | awk '{print $7}' | head -1)
             if [ -z "$process_info" ]; then
                 process_info=$(netstat -tunlp 2>/dev/null | grep ":$custom_port " | awk '{print $7}' | head -1)
@@ -526,7 +582,6 @@ add_service() {
             if [ -n "$process_info" ]; then
                 echo ""
                 echo -e "${YELLOW}建议操作:${NC}"
-                # 提取进程名和PID
                 local process_name=$(echo "$process_info" | cut -d'"' -f2 2>/dev/null || echo "unknown")
                 local pid=$(echo "$process_info" | grep -oP 'pid=\K[0-9]+' 2>/dev/null || echo "")
                 
@@ -543,7 +598,7 @@ add_service() {
             read -p "是否继续使用此端口? (y/n): " continue_choice
             if [[ ! $continue_choice =~ ^[Yy]$ ]]; then
                 warning_msg "已取消添加服务"
-                read -p "按 Enter 继续..."
+                smart_wait
                 return
             fi
         fi
@@ -677,7 +732,7 @@ add_service() {
     fi
     
     echo ""
-    read -p "按 Enter 继续..."
+    smart_wait
 }
 
 # ============================================
@@ -689,37 +744,7 @@ view_services() {
     
     if [ ! -f "$CADDYFILE" ]; then
         warning_msg "配置文件不存在"
-        read -p "按 Enter 继续..."
-        return
-    fi
-    
-    echo -e "${GREEN}Caddyfile 配置:${NC}"
-    echo "─────────────────────────────────────────────"
-    cat "$CADDYFILE"
-    echo "─────────────────────────────────────────────"
-    
-    echo ""
-    echo -e "${GREEN}Caddy 运行状态:${NC}"
-    if $HAS_SYSTEMD; then
-        systemctl status caddy --no-pager || true
-    else
-        echo "  无法查看状态 (非 systemd 系统)"
-    fi
-    
-    echo ""
-    read -p "按 Enter 继续..."
-}
-
-# ============================================
-# 删除服务
-# ============================================
-remove_service() {
-    show_logo
-    echo -e "${CYAN}==================== 删除服务 ====================${NC}\n"
-    
-    if [ ! -f "$CADDYFILE" ]; then
-        warning_msg "配置文件不存在"
-        read -p "按 Enter 继续..."
+        smart_wait
         return
     fi
     
@@ -731,7 +756,7 @@ remove_service() {
     
     if [ -z "$target" ]; then
         warning_msg "已取消"
-        read -p "按 Enter 继续..."
+        smart_wait
         return
     fi
     
@@ -751,7 +776,7 @@ remove_service() {
     fi
     
     echo ""
-    read -p "按 Enter 继续..."
+    smart_wait
 }
 
 # ============================================
@@ -763,7 +788,7 @@ manage_caddy_service() {
     
     if ! $HAS_SYSTEMD; then
         warning_msg "系统不支持 systemctl"
-        read -p "按 Enter 继续..."
+        smart_wait
         return
     fi
     
@@ -812,7 +837,7 @@ manage_caddy_service() {
     esac
     
     echo ""
-    read -p "按 Enter 继续..."
+    smart_wait
 }
 
 # ============================================
@@ -855,7 +880,7 @@ main_menu() {
                 ;;
             7)
                 configure_firewall
-                read -p "按 Enter 继续..."
+                smart_wait
                 ;;
             0)
                 echo -e "\n${GREEN}感谢使用！${NC}\n"
@@ -873,13 +898,30 @@ main_menu() {
 # 程序入口
 # ============================================
 main() {
+    # 检测交互模式
+    check_interactive
+    
     # 创建日志文件
     touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/caddy_setup.log"
     
-    # 首次运行自动环境检查
-    if [ ! -f "/tmp/caddy_script_first_run" ]; then
-        full_environment_check
-        touch "/tmp/caddy_script_first_run"
+    # 首次运行环境检查（仅交互模式）
+    if $IS_INTERACTIVE; then
+        if [ ! -f "/tmp/caddy_script_first_run" ]; then
+            full_environment_check
+            touch "/tmp/caddy_script_first_run"
+        fi
+    else
+        # 非交互模式：显示提示后自动进入菜单
+        show_logo
+        warning_msg "检测到通过管道执行 (curl | bash)"
+        info_msg "将跳过自动环境检查，直接进入主菜单"
+        echo ""
+        echo -e "${CYAN}提示：${NC}"
+        echo "  - 非交互模式下部分功能受限"
+        echo "  - 建议下载脚本后直接执行: bash caddy-manager.sh"
+        echo "  - 或使用: curl -O URL && bash caddy-manager.sh"
+        echo ""
+        sleep 3
     fi
     
     # 进入主菜单
@@ -887,4 +929,40 @@ main() {
 }
 
 # 运行主程序
-main
+main "$@"
+        return
+    fi
+    
+    echo -e "${GREEN}Caddyfile 配置:${NC}"
+    echo "─────────────────────────────────────────────"
+    cat "$CADDYFILE"
+    echo "─────────────────────────────────────────────"
+    
+    echo ""
+    echo -e "${GREEN}Caddy 运行状态:${NC}"
+    if $HAS_SYSTEMD; then
+        systemctl status caddy --no-pager || true
+    else
+        echo "  无法查看状态 (非 systemd 系统)"
+    fi
+    
+    echo ""
+    smart_wait
+}
+
+# ============================================
+# 删除服务
+# ============================================
+remove_service() {
+    show_logo
+    echo -e "${CYAN}==================== 删除服务 ====================${NC}\n"
+    
+    if ! $IS_INTERACTIVE; then
+        warning_msg "非交互模式无法删除服务"
+        sleep 2
+        return
+    fi
+    
+    if [ ! -f "$CADDYFILE" ]; then
+        warning_msg "配置文件不存在"
+        smart_wait

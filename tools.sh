@@ -8,9 +8,23 @@
 # 作者: Auto Generated
 # 日期: 2025-11-15
 #
-# 使用方法:
-#   首次运行: ./tools.sh (自动安装)
-#   安装后: t (全局命令)
+# GitHub: https://github.com/chf5762-sudo/bash
+# Raw链接: https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh
+#
+# 一键安装命令 (复制粘贴到 SSH):
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# 或使用 wget:
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ wget -O tools.sh https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# 安装后使用:
+#   t              # 打开主菜单
+#   t --cmd NAME   # 执行保存的命令
+#   t --help       # 查看帮助
 #
 # 功能模块:
 #   1. 远程脚本管理 (URL/粘贴内容)
@@ -2076,13 +2090,18 @@ configure_gist_sync() {
     
     echo "步骤1: 获取 GitHub Token"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. 访问: https://github.com/settings/tokens"
-    echo "2. 点击: Generate new token (classic)"
-    echo "3. Note: tools-sync"
-    echo "4. Expiration: No expiration"
-    echo "5. 勾选权限: ☑ gist"
-    echo "6. 点击: Generate token"
-    echo "7. 复制 Token"
+    echo ""
+    echo -e "${CYAN}📋 Token 生成链接（点击访问）:${NC}"
+    echo -e "${GREEN}https://github.com/settings/tokens/new${NC}"
+    echo ""
+    echo "配置说明:"
+    echo "1. Note: ${CYAN}tools-sync${NC} (随便填写)"
+    echo "2. Expiration: ${CYAN}No expiration${NC} (永不过期)"
+    echo "3. 勾选权限: ${GREEN}☑ gist${NC}"
+    echo "4. 点击底部: ${GREEN}Generate token${NC} 按钮"
+    echo "5. ${YELLOW}复制生成的 Token${NC} (只显示一次，请保存好)"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     
     read -p "请输入 GitHub Token: " token
@@ -2100,18 +2119,23 @@ configure_gist_sync() {
     local username=$(echo "$test_response" | grep -o '"login": "[^"]*' | cut -d'"' -f4)
     
     if [[ -z "$username" ]]; then
-        print_error "Token 验证失败"
-        sleep 2
+        print_error "Token 验证失败，请检查 Token 是否正确"
+        echo ""
+        echo "常见错误:"
+        echo "- Token 复制不完整"
+        echo "- Token 没有勾选 gist 权限"
+        echo "- Token 已过期或被删除"
+        sleep 3
         return
     fi
     
-    print_success "Token 有效，用户: $username"
+    print_success "Token 有效，GitHub 用户: ${GREEN}$username${NC}"
     
     echo ""
     echo "步骤2: 同步模式"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "[1] 私有 Gist (推荐，仅你可见)"
-    echo "[2] 公开 Gist (任何人可访问)"
+    echo "[1] 私有 Gist (${GREEN}推荐${NC}，仅你可见)"
+    echo "[2] 公开 Gist (任何人可通过URL访问)"
     echo ""
     read -p "选择 [1]: " mode
     mode=${mode:-1}
@@ -2153,13 +2177,28 @@ configure_gist_sync() {
     
     if [[ -z "$gist_id" ]]; then
         print_error "创建 Gist 失败"
-        echo "$gist_response"
-        sleep 3
+        echo ""
+        echo "可能原因:"
+        echo "- Token 权限不足"
+        echo "- 网络连接问题"
+        echo ""
+        echo "错误信息:"
+        echo "$gist_response" | head -20
+        sleep 5
         return
     fi
     
     print_success "Gist 创建成功"
-    print_info "Gist ID: $gist_id"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    print_info "Gist ID: ${CYAN}$gist_id${NC}"
+    echo ""
+    if [[ $is_public == "true" ]]; then
+        echo "Gist URL: ${GREEN}https://gist.github.com/$username/$gist_id${NC}"
+    else
+        echo "Gist URL: ${YELLOW}https://gist.github.com/$gist_id${NC} (私有，仅你可见)"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     
     # 保存配置
     cat > "$SYNC_CONFIG" <<EOF
@@ -2171,7 +2210,14 @@ EOF
     
     chmod 600 "$SYNC_CONFIG"
     
-    print_success "云同步配置完成"
+    echo ""
+    print_success "云同步配置完成！"
+    echo ""
+    echo "现在你可以："
+    echo "- 添加脚本/命令会自动同步到云端"
+    echo "- 在其他服务器使用相同 Token 同步数据"
+    echo "- 通过主菜单 [22] 管理云同步"
+    
     log_action "Configure Gist sync"
     
     echo ""

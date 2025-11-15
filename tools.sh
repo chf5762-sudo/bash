@@ -7,6 +7,15 @@
 # 安装位置: /usr/local/bin/t
 # 作者: Auto Generated (patched)
 # 日期: 2025-11-15
+##一键安装命令 (复制粘贴到 SSH):
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# 或使用 wget:
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ wget -O tools.sh https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
 #
 # GitHub: https://github.com/chf5762-sudo/bash
 # Raw链接: https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh
@@ -2950,3 +2959,13 @@ main() {
 }
 
 main "$@"
+# 一键安装命令 (复制粘贴到 SSH):
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
+#
+# 或使用 wget:
+# ┌─────────────────────────────────────────────────────────────────────┐
+# │ wget -O tools.sh https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh && chmod +x tools.sh && sudo ./tools.sh │
+# └─────────────────────────────────────────────────────────────────────┘
+#

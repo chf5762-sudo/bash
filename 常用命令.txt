@@ -1,1 +1,2 @@
-123
+filebrowser -r / -a 0.0.0.0
+vmpt="2052" hypt="50004"  uuid="57628066-f4a3-47cf-85dc-560d92d4b856" cdnym="chf5762.cloudns.org" ippz="4" bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh) rep

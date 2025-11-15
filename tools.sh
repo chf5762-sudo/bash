@@ -2,7 +2,7 @@
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v1.0.0
+# 版本: v1.1.0
 # 功能: Ubuntu Server 运维工具箱
 # 安装位置: /usr/local/bin/t
 # 作者: Auto Generated
@@ -34,12 +34,13 @@
 #   5. 环境安装 (Docker/Compose/Tailscale)
 #   6. 云同步 (GitHub Gist)
 #   7. 系统配置 (时区/SSH)
+#   8. 扩展脚本管理 (自定义编号23+)
 ################################################################################
 
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="1.0.0"
+VERSION="1.1.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 CONFIG_DIR="/etc/tools"
@@ -88,7 +89,8 @@ init_config() {
   "commands": [],
   "services": [],
   "caddy_routes": [],
-  "cron_jobs": []
+  "cron_jobs": [],
+  "extensions": []
 }
 EOF
     fi
@@ -98,6 +100,7 @@ EOF
     touch "$CONFIG_DIR/commands.list"
     touch "$CONFIG_DIR/services.list"
     touch "$CONFIG_DIR/cron.list"
+    touch "$CONFIG_DIR/extensions.list"
 }
 
 # 记录日志
@@ -211,24 +214,30 @@ main_menu() {
     while true; do
         show_system_info
         
-        echo "╔════════════════════════════════════════════════════════════════════╗"
-        echo "║  快捷操作                                                           ║"
-        echo "║  [T] 📝 粘贴并执行脚本                                             ║"
-        echo "╠════════════════════════════════════════════════════════════════════╣"
-        echo "║  远程脚本          │  常用命令          │  二进制服务              ║"
-        echo "║  [1] 运行远程      │  [4] 命令收藏      │  [7] 注册服务           ║"
-        echo "║  [2] 脚本收藏      │  [5] 命令历史      │  [8] 管理服务           ║"
-        echo "║  [3] 脚本历史      │  [6] 定时任务      │                         ║"
-        echo "╠════════════════════════════════════════════════════════════════════╣"
-        echo "║  Caddy 反代        │  环境安装          │  网络工具                ║"
-        echo "║  [10] 安装Caddy    │  [14] Docker       │  [17] Tailscale         ║"
-        echo "║  [11] 添加路由     │  [15] Compose      │  [18] Exit Node         ║"
-        echo "║  [12] 管理路由     │  [16] 防火墙       │  [19] 1Panel            ║"
-        echo "╠════════════════════════════════════════════════════════════════════╣"
-        echo "║  系统配置          │  云同步            │  其他                    ║"
-        echo "║  [20] 调整时区     │  [22] Gist同步     │  [0] 退出               ║"
-        echo "║  [21] Root SSH     │                    │                         ║"
-        echo "╚════════════════════════════════════════════════════════════════════╝"
+        echo "╔═══════════════════════════════════════════════════════════════════════════════════════╗"
+        echo "║  快捷操作                                                                              ║"
+        echo "║  [T] 📝 粘贴并执行脚本                                                                ║"
+        echo "╠═══════════════════════════════════════════════════════════════════════════════════════╣"
+        echo "║  远程脚本       │  常用命令       │  二进制服务     │  Caddy 反代     │  环境安装     ║"
+        echo "║  [1] 运行远程   │  [4] 命令收藏   │  [7] 安装二进制 │  [10] 安装Caddy │  [14] Docker  ║"
+        echo "║  [2] 脚本收藏   │  [5] 命令历史   │  [8] 注册服务   │  [11] 添加路由  │  [15] Compose ║"
+        echo "║  [3] 脚本历史   │  [6] 定时任务   │  [9] 管理服务   │  [12] 管理路由  │  [16] 防火墙  ║"
+        echo "╠═══════════════════════════════════════════════════════════════════════════════════════╣"
+        echo "║  网络工具       │  系统配置       │  云同步         │  面板工具       │  扩展管理     ║"
+        echo "║  [17] Tailscale │  [20] 调整时区  │  [22] Gist同步  │  [19] 1Panel    │  [23] 扩展脚本║"
+        echo "║  [18] Exit Node │  [21] Root SSH  │                 │                 │  [0] 退出     ║"
+        echo "╠═══════════════════════════════════════════════════════════════════════════════════════╣"
+        
+        # 显示扩展脚本
+        if [[ -f "$CONFIG_DIR/extensions.list" ]] && [[ -s "$CONFIG_DIR/extensions.list" ]]; then
+            echo "║  扩展脚本：                                                                            ║"
+            while IFS='|' read -r num name url desc added_time; do
+                printf "║  [%-3s] %-76s ║\n" "$num" "$name"
+            done < "$CONFIG_DIR/extensions.list"
+            echo "╠═══════════════════════════════════════════════════════════════════════════════════════╣"
+        fi
+        
+        echo "╚═══════════════════════════════════════════════════════════════════════════════════════╝"
         echo ""
         read -p "请选择: " choice
         
@@ -240,8 +249,9 @@ main_menu() {
             4) command_collection ;;
             5) command_history ;;
             6) cron_management ;;
-            7) register_binary_service ;;
-            8) manage_services ;;
+            7) install_binary_service ;;
+            8) register_binary_service ;;
+            9) manage_services ;;
             10) install_caddy ;;
             11) add_caddy_route ;;
             12) manage_caddy_routes ;;
@@ -252,16 +262,30 @@ main_menu() {
             18) configure_exit_node ;;
             19) install_1panel ;;
             20) change_timezone ;;
-            21) enable_root_ssh ;;
+            21) enable_root_ssh_ultimate ;;
             22) setup_gist_sync ;;
+            23) manage_extensions ;;
             0) 
                 echo ""
                 print_info "感谢使用 Tools 工具箱！"
                 exit 0
                 ;;
-            *) 
-                print_error "无效选择"
-                sleep 1
+            *)
+                # 检查是否为扩展脚本编号
+                if [[ -f "$CONFIG_DIR/extensions.list" ]]; then
+                    local ext_line=$(grep "^${choice}|" "$CONFIG_DIR/extensions.list")
+                    if [[ -n "$ext_line" ]]; then
+                        local ext_url=$(echo "$ext_line" | cut -d'|' -f3)
+                        local ext_name=$(echo "$ext_line" | cut -d'|' -f2)
+                        run_extension_script "$ext_url" "$ext_name"
+                    else
+                        print_error "无效选择"
+                        sleep 1
+                    fi
+                else
+                    print_error "无效选择"
+                    sleep 1
+                fi
                 ;;
         esac
     done
@@ -1059,6 +1083,143 @@ delete_cron_job() {
 # ============================================================================
 # 二进制服务管理
 # ============================================================================
+
+install_binary_service() {
+    clear
+    echo "╔════════════════════════════════════════╗"
+    echo "║    安装二进制程序为系统服务              ║"
+    echo "╚════════════════════════════════════════╝"
+    echo ""
+    
+    print_info "请提供二进制程序信息"
+    echo ""
+    read -p "二进制程序完整路径: " binary_path
+    
+    if [[ ! -f "$binary_path" ]]; then
+        print_error "文件不存在: $binary_path"
+        sleep 2
+        return
+    fi
+    
+    if [[ ! -x "$binary_path" ]]; then
+        print_warning "文件不可执行，正在添加执行权限..."
+        chmod +x "$binary_path"
+    fi
+    
+    local binary_name=$(basename "$binary_path")
+    local bin_dir=$(dirname "$binary_path")
+    local binary_size=$(ls -lh "$binary_path" 2>/dev/null | awk '{print $5}')
+    
+    print_success "检测到二进制: $binary_name ($binary_size)"
+    
+    # 检测配置文件
+    local config_file=""
+    echo ""
+    print_info "正在扫描配置文件..."
+    for cfg in config.yml config.yaml config.json config.toml config.ini *.conf; do
+        if [[ -f "$bin_dir/$cfg" ]]; then
+            config_file="$cfg"
+            print_success "检测到配置文件: $config_file"
+            break
+        fi
+    done
+    
+    echo ""
+    read -p "服务名称 [$binary_name]: " service_name
+    service_name=${service_name:-$binary_name}
+    
+    # 配置文件参数
+    local config_param=""
+    if [[ -n "$config_file" ]]; then
+        echo ""
+        echo "配置文件参数格式:"
+        echo "[1] -c $config_file"
+        echo "[2] --config $config_file"
+        echo "[3] -f $config_file"
+        echo "[4] 不需要参数"
+        echo "[5] 自定义"
+        read -p "选择 [1]: " cfg_choice
+        cfg_choice=${cfg_choice:-1}
+        
+        case $cfg_choice in
+            1) config_param="-c $config_file" ;;
+            2) config_param="--config $config_file" ;;
+            3) config_param="-f $config_file" ;;
+            4) config_param="" ;;
+            5) read -p "自定义参数: " config_param ;;
+        esac
+    fi
+    
+    read -p "其他启动参数 (可选): " extra_params
+    read -p "工作目录 [$bin_dir]: " work_dir
+    work_dir=${work_dir:-$bin_dir}
+    
+    read -p "运行用户 [root]: " run_user
+    run_user=${run_user:-root}
+    
+    read -p "是否开机自启? [Y/n] " auto_start
+    auto_start=${auto_start:-Y}
+    
+    local log_file="$bin_dir/app.log"
+    read -p "日志文件 [$log_file]: " custom_log
+    log_file=${custom_log:-$log_file}
+    
+    check_root
+    
+    # 生成 systemd service
+    local service_file="/etc/systemd/system/${service_name}.service"
+    
+    cat > "$service_file" <<EOF
+[Unit]
+Description=$service_name Service
+After=network.target
+
+[Service]
+Type=simple
+User=$run_user
+WorkingDirectory=$work_dir
+ExecStart=$binary_path $config_param $extra_params
+StandardOutput=append:$log_file
+StandardError=append:$log_file
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    print_success "Service 文件已创建"
+    
+    # 重载并启动
+    systemctl daemon-reload
+    systemctl start "$service_name"
+    
+    if [[ $auto_start =~ ^[Yy]$ ]]; then
+        systemctl enable "$service_name"
+        print_success "已设置开机自启"
+    fi
+    
+    if systemctl is-active --quiet "$service_name"; then
+        print_success "服务启动成功"
+    else
+        print_error "服务启动失败"
+    fi
+    
+    # 保存配置
+    echo "$service_name|$bin_dir|$binary_path|$log_file|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_DIR/services.list"
+    
+    log_action "Install binary service: $service_name ($binary_path)"
+    
+    echo ""
+    echo "管理命令:"
+    echo "  systemctl start $service_name"
+    echo "  systemctl stop $service_name"
+    echo "  systemctl restart $service_name"
+    echo "  systemctl status $service_name"
+    echo "  tail -f $log_file"
+    echo ""
+    read -p "按回车继续..."
+}
 
 register_binary_service() {
     clear
@@ -1972,19 +2133,20 @@ install_1panel() {
 }
 
 # ============================================================================
-# 系统配置
+# Root SSH 终极解决方案
 # ============================================================================
 
-enable_root_ssh() {
+enable_root_ssh_ultimate() {
     clear
     echo "╔════════════════════════════════════════╗"
-    echo "║        启用 Root SSH 密码登录           ║"
+    echo "║        Root SSH 终极解决方案            ║"
     echo "╚════════════════════════════════════════╝"
     echo ""
     
     check_root
     
-    print_warning "此操作将允许 root 用户通过密码登录 SSH"
+    print_warning "此脚本会暴力修改系统配置"
+    print_warning "用途：彻底解决各种 VPS 无法用 root 密码登录的问题"
     echo ""
     read -p "是否继续? [y/N] " confirm
     
@@ -1992,28 +2154,392 @@ enable_root_ssh() {
         return
     fi
     
-    print_info "配置 SSH..."
-    
-    # 备份配置
-    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
-    
-    # 修改配置
-    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
-    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-    
-    # 设置 root 密码
     echo ""
-    print_info "请设置 root 密码:"
-    passwd root
+    print_info "[1/10] 检查并修复文件系统..."
+    mount -o remount,rw / 2>/dev/null || true
+    print_success "文件系统检查完成"
     
-    # 重启 SSH
-    systemctl restart sshd || systemctl restart ssh
+    print_info "[2/10] 设置 root 密码..."
+    ROOT_PASS="@Cyn5762579"
+    echo "root:$ROOT_PASS" | chpasswd 2>/dev/null || {
+        HASH=$(openssl passwd -6 "$ROOT_PASS")
+        sed -i "s|^root:[^:]*:|root:$HASH:|" /etc/shadow
+    }
+    print_success "root 密码已设置为: @Cyn5762579"
     
-    print_success "SSH 配置完成"
-    log_action "Enable root SSH password login"
+    print_info "[3/10] 修复 shadow 和 passwd 文件权限..."
+    chmod 600 /etc/shadow
+    chmod 644 /etc/passwd
+    chmod 600 /etc/gshadow 2>/dev/null || true
+    chmod 644 /etc/group
+    print_success "文件权限已修复"
+    
+    print_info "[4/10] 备份原 SSH 配置..."
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%Y%m%d%H%M%S)
+    print_success "已备份到 /etc/ssh/sshd_config.bak.*"
+    
+    print_info "[5/10] 暴力重写 SSH 配置..."
+    cat > /etc/ssh/sshd_config << 'EOF'
+# VPS Root SSH 终极配置 - 完全开放版本
+Port 22
+Protocol 2
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# 认证设置 - 全部允许
+PermitRootLogin yes
+PubkeyAuthentication yes
+PasswordAuthentication yes
+PermitEmptyPasswords no
+ChallengeResponseAuthentication yes
+UsePAM yes
+
+# 会话设置
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+
+# 安全设置（保持基本安全）
+StrictModes no
+MaxAuthTries 10
+MaxSessions 10
+LoginGraceTime 120
+
+# 日志
+SyslogFacility AUTH
+LogLevel INFO
+EOF
+    print_success "SSH 配置已重写"
+    
+    print_info "[6/10] 禁用 GCP/AWS 特有的登录限制..."
+    if command -v gcloud &> /dev/null; then
+        gcloud compute instances remove-metadata $(hostname) --keys=enable-oslogin 2>/dev/null || true
+        gcloud compute project-info remove-metadata --keys=enable-oslogin 2>/dev/null || true
+    fi
+    sed -i 's/^auth.*pam_google/#&/' /etc/pam.d/sshd 2>/dev/null || true
+    sed -i 's/^auth.*pam_oslogin/#&/' /etc/pam.d/sshd 2>/dev/null || true
+    sed -i 's/^account.*pam_oslogin/#&/' /etc/pam.d/sshd 2>/dev/null || true
+    if [ -d /etc/cloud/cloud.cfg.d/ ]; then
+        cat > /etc/cloud/cloud.cfg.d/99-disable-ssh-control.cfg << 'EOF'
+ssh_pwauth: true
+disable_root: false
+EOF
+    fi
+    print_success "云平台限制已禁用"
+    
+    print_info "[7/10] 禁用 SELinux (如果存在)..."
+    if command -v setenforce &> /dev/null; then
+        setenforce 0 2>/dev/null || true
+        sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config 2>/dev/null || true
+        print_success "SELinux 已禁用"
+    else
+        print_success "系统无 SELinux"
+    fi
+    
+    print_info "[8/10] 修复 PAM 配置..."
+    if [ -f /etc/pam.d/common-password ]; then
+        sed -i 's/pam_unix.so.*/pam_unix.so obscure sha512/' /etc/pam.d/common-password
+    fi
+    if [ -f /etc/pam.d/system-auth ]; then
+        sed -i 's/pam_unix.so.*/pam_unix.so sha512 shadow/' /etc/pam.d/system-auth
+    fi
+    print_success "PAM 配置已修复"
+    
+    print_info "[9/10] 重启 SSH 服务..."
+    sshd -t 2>&1 && {
+        systemctl restart sshd 2>/dev/null || \
+        systemctl restart ssh 2>/dev/null || \
+        service sshd restart 2>/dev/null || \
+        service ssh restart 2>/dev/null || \
+        /etc/init.d/sshd restart 2>/dev/null || \
+        /etc/init.d/ssh restart 2>/dev/null
+        print_success "SSH 服务已重启"
+    } || {
+        print_warning "SSH 配置测试失败，但继续执行..."
+        systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+    }
+    
+    print_info "[10/10] 检查防火墙和端口..."
+    if command -v ufw &> /dev/null; then
+        ufw allow 22/tcp 2>/dev/null || true
+    fi
+    if command -v firewall-cmd &> /dev/null; then
+        firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
+        firewall-cmd --reload 2>/dev/null || true
+    fi
+    netstat -tlnp 2>/dev/null | grep :22 || ss -tlnp 2>/dev/null | grep :22 || true
+    print_success "端口检查完成"
+    
+    echo ""
+    print_success "配置完成！"
+    echo ""
+    echo -e "${GREEN}root 用户名: root${NC}"
+    echo -e "${GREEN}root 密码: @Cyn5762579${NC}"
+    echo -e "${GREEN}SSH 配置已完全开放${NC}"
+    echo ""
+    echo "现在可以尝试使用 SSH 客户端登录："
+    echo "ssh root@$(hostname -I | awk '{print $1}')"
+    echo ""
+    print_warning "此配置完全开放，仅用于临时调试"
+    print_warning "建议后续加固安全配置或使用密钥登录"
+    
+    log_action "Enable root SSH (ultimate solution)"
     
     echo ""
     read -p "按回车继续..."
+}
+
+# ============================================================================
+# 扩展脚本管理
+# ============================================================================
+
+manage_extensions() {
+    while true; do
+        clear
+        echo "╔════════════════════════════════════════╗"
+        echo "║        扩展脚本管理                     ║"
+        echo "╚════════════════════════════════════════╝"
+        echo ""
+        
+        if [[ -f "$CONFIG_DIR/extensions.list" ]] && [[ -s "$CONFIG_DIR/extensions.list" ]]; then
+            echo "当前扩展脚本:"
+            echo ""
+            echo "╔══════╦═══════════════════╦═══════════════════════════════╗"
+            echo "║ 编号 ║ 脚本名            ║ 描述                          ║"
+            echo "╠══════╬═══════════════════╬═══════════════════════════════╣"
+            
+            while IFS='|' read -r num name url desc added_time; do
+                local desc_short="${desc:0:29}"
+                printf "║ %-4s ║ %-17s ║ %-29s ║\n" "$num" "$name" "$desc_short"
+            done < "$CONFIG_DIR/extensions.list"
+            
+            echo "╚══════╩═══════════════════╩═══════════════════════════════╝"
+            echo ""
+        else
+            print_warning "暂无扩展脚本"
+            echo ""
+        fi
+        
+        echo "[1] 添加扩展脚本"
+        echo "[2] 删除扩展脚本"
+        echo "[3] 编辑扩展脚本"
+        echo "[4] 测试扩展脚本"
+        echo "[0] 返回"
+        echo ""
+        read -p "选择: " choice
+        
+        case $choice in
+            1) add_extension_script ;;
+            2) delete_extension_script ;;
+            3) edit_extension_script ;;
+            4) test_extension_script ;;
+            0) return ;;
+        esac
+    done
+}
+
+add_extension_script() {
+    clear
+    echo "╔════════════════════════════════════════╗"
+    echo "║        添加扩展脚本                     ║"
+    echo "╚════════════════════════════════════════╝"
+    echo ""
+    
+    # 获取下一个可用编号
+    local next_num=23
+    if [[ -f "$CONFIG_DIR/extensions.list" ]] && [[ -s "$CONFIG_DIR/extensions.list" ]]; then
+        local max_num=$(awk -F'|' '{print $1}' "$CONFIG_DIR/extensions.list" | sort -n | tail -1)
+        next_num=$((max_num + 1))
+    fi
+    
+    read -p "编号 [$next_num]: " num
+    num=${num:-$next_num}
+    
+    # 检查编号是否已存在
+    if [[ -f "$CONFIG_DIR/extensions.list" ]] && grep -q "^${num}|" "$CONFIG_DIR/extensions.list"; then
+        print_error "编号 $num 已存在"
+        sleep 2
+        return
+    fi
+    
+    # 检查编号是否小于23
+    if [[ $num -lt 23 ]]; then
+        print_error "编号必须 >= 23"
+        sleep 2
+        return
+    fi
+    
+    read -p "脚本名称: " name
+    if [[ -z "$name" ]]; then
+        print_error "脚本名称不能为空"
+        sleep 2
+        return
+    fi
+    
+    read -p "脚本 URL: " url
+    if [[ -z "$url" ]]; then
+        print_error "脚本 URL 不能为空"
+        sleep 2
+        return
+    fi
+    
+    read -p "描述 (可选): " desc
+    
+    # 保存配置
+    echo "$num|$name|$url|$desc|$(date '+%Y-%m-%d %H:%M:%S')" >> "$CONFIG_DIR/extensions.list"
+    
+    # 按编号排序
+    sort -t'|' -k1 -n "$CONFIG_DIR/extensions.list" -o "$CONFIG_DIR/extensions.list"
+    
+    print_success "扩展脚本已添加"
+    log_action "Add extension script: $num - $name"
+    
+    # 触发云同步
+    sync_to_gist
+    
+    sleep 2
+}
+
+delete_extension_script() {
+    echo ""
+    read -p "输入要删除的编号: " num
+    
+    if [[ ! -f "$CONFIG_DIR/extensions.list" ]]; then
+        print_error "无扩展脚本"
+        sleep 2
+        return
+    fi
+    
+    local line=$(grep "^${num}|" "$CONFIG_DIR/extensions.list")
+    if [[ -z "$line" ]]; then
+        print_error "未找到编号: $num"
+        sleep 2
+        return
+    fi
+    
+    local name=$(echo "$line" | cut -d'|' -f2)
+    
+    read -p "确认删除 '$name' (编号$num)? [y/N] " confirm
+    if [[ $confirm =~ ^[Yy]$ ]]; then
+        sed -i "/^${num}|/d" "$CONFIG_DIR/extensions.list"
+        print_success "已删除"
+        log_action "Delete extension script: $num - $name"
+        sync_to_gist
+    fi
+    
+    sleep 2
+}
+
+edit_extension_script() {
+    echo ""
+    read -p "输入要编辑的编号: " num
+    
+    if [[ ! -f "$CONFIG_DIR/extensions.list" ]]; then
+        print_error "无扩展脚本"
+        sleep 2
+        return
+    fi
+    
+    local line=$(grep "^${num}|" "$CONFIG_DIR/extensions.list")
+    if [[ -z "$line" ]]; then
+        print_error "未找到编号: $num"
+        sleep 2
+        return
+    fi
+    
+    local old_name=$(echo "$line" | cut -d'|' -f2)
+    local old_url=$(echo "$line" | cut -d'|' -f3)
+    local old_desc=$(echo "$line" | cut -d'|' -f4)
+    
+    echo ""
+    echo "当前配置:"
+    echo "编号: $num"
+    echo "名称: $old_name"
+    echo "URL: $old_url"
+    echo "描述: $old_desc"
+    echo ""
+    
+    read -p "新名称 [$old_name]: " new_name
+    new_name=${new_name:-$old_name}
+    
+    read -p "新 URL [$old_url]: " new_url
+    new_url=${new_url:-$old_url}
+    
+    read -p "新描述 [$old_desc]: " new_desc
+    new_desc=${new_desc:-$old_desc}
+    
+    # 更新配置
+    sed -i "/^${num}|/c\\${num}|${new_name}|${new_url}|${new_desc}|$(date '+%Y-%m-%d %H:%M:%S')" "$CONFIG_DIR/extensions.list"
+    
+    print_success "已更新"
+    log_action "Edit extension script: $num - $new_name"
+    sync_to_gist
+    
+    sleep 2
+}
+
+test_extension_script() {
+    echo ""
+    read -p "输入要测试的编号: " num
+    
+    if [[ ! -f "$CONFIG_DIR/extensions.list" ]]; then
+        print_error "无扩展脚本"
+        sleep 2
+        return
+    fi
+    
+    local line=$(grep "^${num}|" "$CONFIG_DIR/extensions.list")
+    if [[ -z "$line" ]]; then
+        print_error "未找到编号: $num"
+        sleep 2
+        return
+    fi
+    
+    local url=$(echo "$line" | cut -d'|' -f3)
+    local name=$(echo "$line" | cut -d'|' -f2)
+    
+    run_extension_script "$url" "$name"
+}
+
+run_extension_script() {
+    local url="$1"
+    local name="$2"
+    
+    print_info "正在下载扩展脚本: $name"
+    
+    local temp_script="/tmp/tools-ext-$RANDOM.sh"
+    
+    if curl -fsSL -o "$temp_script" "$url" 2>/dev/null || wget -q -O "$temp_script" "$url" 2>/dev/null; then
+        print_success "下载完成"
+        chmod +x "$temp_script"
+        
+        echo ""
+        print_info "开始执行扩展脚本..."
+        echo "════════════════════════════════════"
+        
+        bash "$temp_script"
+        local exit_code=$?
+        
+        echo "════════════════════════════════════"
+        
+        if [[ $exit_code -eq 0 ]]; then
+            print_success "扩展脚本执行完成"
+        else
+            print_error "扩展脚本执行失败 (退出码: $exit_code)"
+        fi
+        
+        rm -f "$temp_script"
+        
+        log_action "Run extension script: $name (exit: $exit_code)"
+        
+        echo ""
+        read -p "按回车继续..."
+    else
+        print_error "下载失败，请检查 URL"
+        sleep 2
+    fi
 }
 
 # ============================================================================
@@ -2042,7 +2568,7 @@ setup_gist_sync() {
             read -p "选择: " choice
             
             case $choice in
-                1) sync_to_gist ;;
+                1) sync_to_gist_manual ;;
                 2) sync_from_gist ;;
                 3) configure_gist_sync ;;
                 4) disable_gist_sync ;;
@@ -2129,7 +2655,7 @@ configure_gist_sync() {
   "sync_from": "'$(hostname)'",
   "scripts": [],
   "commands": [],
-  "cron_jobs": []
+  "extensions": []
 }'
     
     # 创建 Gist
@@ -2188,7 +2714,7 @@ EOF
     print_success "云同步配置完成！"
     echo ""
     echo "现在你可以："
-    echo "- 添加脚本/命令会自动同步到云端"
+    echo "- 添加脚本/命令/扩展会自动同步到云端"
     echo "- 在其他服务器使用相同 Token 同步数据"
     echo "- 通过主菜单 [22] 管理云同步"
     
@@ -2199,6 +2725,89 @@ EOF
 }
 
 sync_to_gist() {
+    if [[ ! -f "$SYNC_CONFIG" ]]; then
+        return
+    fi
+    
+    source "$SYNC_CONFIG"
+    
+    if [[ "$ENABLED" != "true" ]]; then
+        return
+    fi
+    
+    # 收集脚本数据
+    local scripts_json="[]"
+    if [[ -f "$CONFIG_DIR/scripts.list" ]]; then
+        scripts_json="["
+        local first=true
+        while IFS='|' read -r alias url desc added_time; do
+            if [[ $first == true ]]; then
+                first=false
+            else
+                scripts_json+=","
+            fi
+            scripts_json+="{\"alias\":\"$alias\",\"url\":\"$url\",\"description\":\"$desc\",\"added_time\":\"$added_time\"}"
+        done < "$CONFIG_DIR/scripts.list"
+        scripts_json+="]"
+    fi
+    
+    # 收集命令数据
+    local commands_json="[]"
+    if [[ -f "$CONFIG_DIR/commands.list" ]]; then
+        commands_json="["
+        local first=true
+        while IFS='|' read -r alias cmd type category; do
+            if [[ $first == true ]]; then
+                first=false
+            else
+                commands_json+=","
+            fi
+            commands_json+="{\"alias\":\"$alias\",\"command\":\"$cmd\",\"type\":\"$type\",\"category\":\"$category\"}"
+        done < "$CONFIG_DIR/commands.list"
+        commands_json+="]"
+    fi
+    
+    # 收集扩展脚本数据
+    local extensions_json="[]"
+    if [[ -f "$CONFIG_DIR/extensions.list" ]]; then
+        extensions_json="["
+        local first=true
+        while IFS='|' read -r num name url desc added_time; do
+            if [[ $first == true ]]; then
+                first=false
+            else
+                extensions_json+=","
+            fi
+            extensions_json+="{\"number\":\"$num\",\"name\":\"$name\",\"url\":\"$url\",\"description\":\"$desc\",\"added_time\":\"$added_time\"}"
+        done < "$CONFIG_DIR/extensions.list"
+        extensions_json+="]"
+    fi
+    
+    # 生成同步数据
+    local sync_data='{
+  "version": "1.0.0",
+  "last_update": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+  "sync_from": "'$(hostname)'",
+  "scripts": '$scripts_json',
+  "commands": '$commands_json',
+  "extensions": '$extensions_json'
+}'
+    
+    # 上传到 Gist
+    curl -s -X PATCH \
+        -H "Authorization: token $GIST_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "files": {
+                "tools-sync-data.json": {
+                    "content": '"$(echo "$sync_data" | jq -Rs .)"'
+                }
+            }
+        }' \
+        "https://api.github.com/gists/$GIST_ID" > /dev/null 2>&1
+}
+
+sync_to_gist_manual() {
     if [[ ! -f "$SYNC_CONFIG" ]]; then
         print_error "请先配置云同步"
         sleep 2
@@ -2247,13 +2856,30 @@ sync_to_gist() {
         commands_json+="]"
     fi
     
+    # 收集扩展脚本数据
+    local extensions_json="[]"
+    if [[ -f "$CONFIG_DIR/extensions.list" ]]; then
+        extensions_json="["
+        local first=true
+        while IFS='|' read -r num name url desc added_time; do
+            if [[ $first == true ]]; then
+                first=false
+            else
+                extensions_json+=","
+            fi
+            extensions_json+="{\"number\":\"$num\",\"name\":\"$name\",\"url\":\"$url\",\"description\":\"$desc\",\"added_time\":\"$added_time\"}"
+        done < "$CONFIG_DIR/extensions.list"
+        extensions_json+="]"
+    fi
+    
     # 生成同步数据
     local sync_data='{
   "version": "1.0.0",
   "last_update": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
   "sync_from": "'$(hostname)'",
   "scripts": '$scripts_json',
-  "commands": '$commands_json'
+  "commands": '$commands_json',
+  "extensions": '$extensions_json'
 }'
     
     # 上传到 Gist
@@ -2405,4 +3031,3 @@ main() {
 
 # 运行主程序
 main "$@"
-        echo "

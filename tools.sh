@@ -595,7 +595,7 @@ script_collection() {
         local index=1
         while IFS='|' read -r alias url desc added_time; do
             echo "[$index] ${CYAN}$alias${NC}"
-            if [[ "$url" == data:text/plain* ]]; then
+            if [[ "$url" =~ ^data:text/plain ]]; then
                 echo "    类型: 粘贴的脚本"
             else
                 echo "    URL: $url"

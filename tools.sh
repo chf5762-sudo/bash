@@ -595,7 +595,7 @@ script_collection() {
         local index=1
         while IFS='|' read -r alias url desc added_time; do
             echo "[$index] ${CYAN}$alias${NC}"
-            if [[ "$url" =~ ^data:text/plain ]]; then
+            if echo "$url" | grep -q "^data:text/plain"; then
                 echo "    类型: 粘贴的脚本"
             else
                 echo "    URL: $url"
@@ -630,8 +630,8 @@ run_script_from_collection() {
     
     print_info "正在加载脚本..."
     
-    # 检查是否为base64数据
-    if [[ "$url" == data:text/plain\;base64,* ]]; then
+    # 检查是否为base64数据（使用字符串匹配而非正则）
+    if echo "$url" | grep -q "^data:text/plain;base64,"; then
         local base64_data="${url#data:text/plain;base64,}"
         echo "$base64_data" | base64 -d > "$temp_script"
     else

@@ -9,7 +9,7 @@
 # 日期: 2025-11-16
 #
 # 一键安装命令:
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 #
 # 安装后使用:
 #   t              # 打开主菜单

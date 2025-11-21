@@ -1,27 +1,35 @@
 #!/bin/bash
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.3.0
+# 版本: v2.4.0
 # 功能: Ubuntu Server 轻量运维工具箱
 # 安装位置: /usr/local/bin/t
 # 作者: Auto Generated
-# 日期: 2025-11-16
+# 日期: 2025-11-21
 #
 # 一键安装命令:
 # curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 #
 # 安装后使用:
 #   t              # 打开主菜单
-#   t C            # 命令收藏夹
-#   t J            # 脚本跳转
+#   t C            # 命令、脚本收藏夹
 #   t --help       # 查看帮助
 ################################################################################
 
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.2.0"
+VERSION="2.4.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 CONFIG_DIR="/etc/tools"
@@ -210,7 +218,7 @@ main_menu() {
         cat <<'EOF'
 
  ▸ 快捷操作（云端）
-   [T] 📝 粘贴并执行    [C] 💾 命令收藏夹    [J] 🚀 脚本跳转
+   [T] 📝 粘贴并执行    [C] 💾 命令、脚本收藏夹
    
  ▸ 服务与容器
    [1] 注册二进制服务
@@ -241,8 +249,7 @@ EOF
         
         case $choice in
             T) run_script_from_paste ;;
-            C) command_favorites ;;
-            J) script_jump ;;
+            C) command_script_favorites ;;
             1) register_binary_service ;;
             2) manage_services ;;
             2A) quick_service_action "start" ;;
@@ -284,44 +291,59 @@ EOF
 }
 
 # ============================================================================
-# [C] 命令收藏夹（云端）
+# [C] 命令、脚本收藏夹（云端）
 # ============================================================================
 
-command_favorites() {
+command_script_favorites() {
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    命令收藏夹（云端共享）                                  ║"
+        echo "║    命令、脚本收藏夹（云端共享）                            ║"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
         sync_from_cloud silent
         
         local cmd_count=$(jq '.commands | length' "$CACHE_FILE" 2>/dev/null || echo "0")
+        local script_count=$(jq '.scripts | length' "$CACHE_FILE" 2>/dev/null || echo "0")
         
-        if [[ $cmd_count -eq 0 ]]; then
-            print_warning "暂无收藏的命令"
+        if [[ $cmd_count -eq 0 ]] && [[ $script_count -eq 0 ]]; then
+            print_warning "暂无收藏的命令或脚本"
         else
-            echo "当前收藏的命令："
-            echo ""
-            for ((i=0; i<cmd_count; i++)); do
-                local id=$(jq -r ".commands[$i].id" "$CACHE_FILE")
-                local cmd=$(jq -r ".commands[$i].command" "$CACHE_FILE")
-                echo "[$id] $cmd"
-            done
+            if [[ $cmd_count -gt 0 ]]; then
+                echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
+                echo ""
+                for ((i=0; i<cmd_count; i++)); do
+                    local id=$(jq -r ".commands[$i].id" "$CACHE_FILE")
+                    local cmd=$(jq -r ".commands[$i].command" "$CACHE_FILE")
+                    echo "[C$id] $cmd"
+                done
+                echo ""
+            fi
+            
+            if [[ $script_count -gt 0 ]]; then
+                echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
+                echo ""
+                for ((i=0; i<script_count; i++)); do
+                    local id=$(jq -r ".scripts[$i].id" "$CACHE_FILE")
+                    local name=$(jq -r ".scripts[$i].name" "$CACHE_FILE")
+                    local lines=$(jq -r ".scripts[$i].lines" "$CACHE_FILE")
+                    echo "[S$id] $name (${lines}行)"
+                done
+                echo ""
+            fi
         fi
         
-        echo ""
-        echo "[A] 添加命令    [D] 删除命令    [E] 执行命令"
-        echo "[V] 查看云端数据（调试）    [0] 返回"
+        echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
+        echo "[4] 删除收藏    [0] 返回"
         echo ""
         read -p "请选择: " choice
         
         case $choice in
-            [Aa]) add_command_favorite ;;
-            [Dd]) delete_command_favorite ;;
-            [Ee]) execute_command_favorite ;;
-            [Vv]) view_cloud_debug ;;
+            1) add_command_favorite ;;
+            2) add_script_favorite ;;
+            3) execute_favorite ;;
+            4) delete_favorite ;;
             0) return ;;
             *) print_error "无效选择"; sleep 1 ;;
         esac
@@ -363,7 +385,7 @@ add_command_favorite() {
     
     # 推送到云端
     if sync_to_cloud silent; then
-        print_success "✓ 已保存为 [$new_id]"
+        print_success "✓ 已保存为 [C$new_id]"
         print_success "✓ 已推送到云端"
         log_action "Add command favorite: $cmd"
     else
@@ -373,49 +395,92 @@ add_command_favorite() {
     sleep 2
 }
 
-delete_command_favorite() {
+add_script_favorite() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║        添加脚本到收藏夹                                    ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-    read -p "输入要删除的命令编号: " id
     
-    if [[ ! "$id" =~ ^[0-9]+$ ]]; then
-        print_error "无效编号"
+    read -p "脚本名称: " script_name
+    
+    if [[ -z "$script_name" ]]; then
+        print_error "脚本名称不能为空"
         sleep 2
         return
     fi
+    
+    echo ""
+    print_info "请粘贴脚本内容 (结束后按 Ctrl+D):"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    local temp_script="/tmp/tools-script-$RANDOM.txt"
+    cat > "$temp_script"
+    
+    if [[ ! -s "$temp_script" ]]; then
+        print_error "未检测到脚本内容"
+        rm -f "$temp_script"
+        sleep 2
+        return
+    fi
+    
+    local line_count=$(wc -l < "$temp_script")
+    local script_content=$(cat "$temp_script")
+    
+    echo ""
+    print_success "脚本内容已接收 ($line_count 行)"
     
     # 先从云端同步
     sync_from_cloud silent
     
-    local found=$(jq ".commands[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
-    
-    if [[ -z "$found" ]]; then
-        print_error "未找到编号: $id"
-        sleep 2
-        return
+    # 获取当前最大 ID
+    local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$max_id" || "$max_id" == "null" ]]; then
+        max_id=0
     fi
-    
-    local cmd=$(echo "$found" | jq -r '.command')
+    local new_id=$((max_id + 1))
     
     echo ""
-    print_info "正在删除: $cmd"
+    print_info "正在保存脚本..."
     
-    local updated=$(jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE")
+    # 添加到本地缓存
+    local new_script=$(jq -n \
+        --arg id "$new_id" \
+        --arg name "$script_name" \
+        --arg content "$script_content" \
+        --arg lines "$line_count" \
+        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), added_time: $time}')
+    
+    local updated=$(jq ".scripts += [$new_script]" "$CACHE_FILE")
     echo "$updated" > "$CACHE_FILE"
     
+    rm -f "$temp_script"
+    
+    # 推送到云端
     if sync_to_cloud silent; then
-        print_success "✓ 命令已删除"
-        print_success "✓ 已同步到云端"
-        log_action "Delete command favorite: $id"
+        print_success "✓ 已保存为 [S$new_id]"
+        print_success "✓ 已推送到云端"
+        log_action "Add script favorite: $script_name"
     else
-        print_error "✗ 云端同步失败（已从本地删除）"
+        print_error "✗ 云端同步失败（已保存到本地）"
     fi
     
     sleep 2
 }
 
-execute_command_favorite() {
+execute_favorite() {
     echo ""
-    read -p "输入要执行的命令编号: " id
+    read -p "输入要执行的编号 (如: C1 或 S2): " input
+    
+    if [[ -z "$input" ]]; then
+        print_error "编号不能为空"
+        sleep 2
+        return
+    fi
+    
+    local type="${input:0:1}"
+    local id="${input:1}"
     
     if [[ ! "$id" =~ ^[0-9]+$ ]]; then
         print_error "无效编号"
@@ -423,10 +488,27 @@ execute_command_favorite() {
         return
     fi
     
+    case "${type^^}" in
+        C)
+            execute_command_favorite "$id"
+            ;;
+        S)
+            execute_script_favorite "$id"
+            ;;
+        *)
+            print_error "无效编号格式，请使用 C1 或 S2 格式"
+            sleep 2
+            ;;
+    esac
+}
+
+execute_command_favorite() {
+    local id="$1"
+    
     local found=$(jq ".commands[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
     
     if [[ -z "$found" ]]; then
-        print_error "未找到编号: $id"
+        print_error "未找到命令编号: C$id"
         sleep 2
         return
     fi
@@ -448,200 +530,147 @@ execute_command_favorite() {
         print_error "命令执行失败 (退出码: $exit_code)"
     fi
     
-    log_action "Execute command favorite: $id - $cmd"
+    log_action "Execute command favorite: C$id - $cmd"
     
     echo ""
     read -p "按回车继续..."
 }
 
-# ============================================================================
-# [J] 脚本跳转（云端）
-# ============================================================================
-
-script_jump() {
-    while true; do
-        clear
-        echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    脚本跳转（云端共享）                                    ║"
-        echo "╚════════════════════════════════════════════════════════════╝"
-        echo ""
-        
-        sync_from_cloud silent
-        
-        local script_count=$(jq '.scripts | length' "$CACHE_FILE" 2>/dev/null || echo "0")
-        
-        if [[ $script_count -eq 0 ]]; then
-            print_warning "暂无可用的脚本"
-        else
-            echo "可用的脚本："
-            echo ""
-            for ((i=0; i<script_count; i++)); do
-                local id=$(jq -r ".scripts[$i].id" "$CACHE_FILE")
-                local name=$(jq -r ".scripts[$i].name" "$CACHE_FILE")
-                local url=$(jq -r ".scripts[$i].url" "$CACHE_FILE")
-                echo "[$id] $name"
-                echo "    URL: $url"
-                echo ""
-            done
-        fi
-        
-        echo "[A] 添加脚本    [D] 删除脚本    [0] 返回"
-        echo ""
-        read -p "请选择（输入编号直接跳转）: " choice
-        
-        case $choice in
-            [Aa]) add_script_jump ;;
-            [Dd]) delete_script_jump ;;
-            0) return ;;
-            [0-9]*)
-                execute_script_jump "$choice"
-                ;;
-            *)
-                print_error "无效选择"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-add_script_jump() {
-    echo ""
-    read -p "脚本名称: " name
-    
-    if [[ -z "$name" ]]; then
-        print_error "名称不能为空"
-        sleep 2
-        return
-    fi
-    
-    read -p "脚本 URL: " url
-    
-    if [[ -z "$url" ]]; then
-        print_error "URL 不能为空"
-        sleep 2
-        return
-    fi
-    
-    # 先从云端同步
-    sync_from_cloud silent
-    
-    # 获取当前最大 ID
-    local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
-    if [[ -z "$max_id" || "$max_id" == "null" ]]; then
-        max_id=0
-    fi
-    local new_id=$((max_id + 1))
-    
-    echo ""
-    print_info "正在保存脚本..."
-    
-    # 添加到本地缓存
-    local new_script=$(jq -n \
-        --arg id "$new_id" \
-        --arg name "$name" \
-        --arg url "$url" \
-        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{id: ($id | tonumber), name: $name, url: $url, added_time: $time}')
-    
-    local updated=$(jq ".scripts += [$new_script]" "$CACHE_FILE")
-    echo "$updated" > "$CACHE_FILE"
-    
-    if sync_to_cloud silent; then
-        print_success "✓ 已保存为 [$new_id]"
-        print_success "✓ 已推送到云端"
-        log_action "Add script jump: $name"
-    else
-        print_error "✗ 云端同步失败（已保存到本地）"
-    fi
-    
-    sleep 2
-}
-
-delete_script_jump() {
-    echo ""
-    read -p "输入要删除的脚本编号: " id
-    
-    if [[ ! "$id" =~ ^[0-9]+$ ]]; then
-        print_error "无效编号"
-        sleep 2
-        return
-    fi
-    
-    # 先从云端同步
-    sync_from_cloud silent
-    
-    local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
-    
-    if [[ -z "$found" ]]; then
-        print_error "未找到编号: $id"
-        sleep 2
-        return
-    fi
-    
-    local name=$(echo "$found" | jq -r '.name')
-    
-    echo ""
-    print_info "正在删除: $name"
-    
-    local updated=$(jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE")
-    echo "$updated" > "$CACHE_FILE"
-    
-    if sync_to_cloud silent; then
-        print_success "✓ 脚本已删除"
-        print_success "✓ 已同步到云端"
-        log_action "Delete script jump: $id"
-    else
-        print_error "✗ 云端同步失败（已从本地删除）"
-    fi
-    
-    sleep 2
-}
-
-execute_script_jump() {
+execute_script_favorite() {
     local id="$1"
     
-    if [[ ! "$id" =~ ^[0-9]+$ ]]; then
-        print_error "无效编号"
-        sleep 1
-        return
-    fi
-    
     local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
     
     if [[ -z "$found" ]]; then
-        print_error "未找到编号: $id"
-        sleep 1
+        print_error "未找到脚本编号: S$id"
+        sleep 2
         return
     fi
     
     local name=$(echo "$found" | jq -r '.name')
-    local url=$(echo "$found" | jq -r '.url')
+    local content=$(echo "$found" | jq -r '.content')
     
-    clear
-    print_info "正在下载: $name"
-    print_info "URL: $url"
+    echo ""
+    print_info "执行脚本: $name"
+    echo ""
+    read -p "是否需要传递参数? [留空直接执行]: " params
     
-    local temp_script="/tmp/tools-jump-$(date +%s).sh"
+    local temp_script="/tmp/tools-exec-$RANDOM.sh"
+    echo "$content" > "$temp_script"
+    chmod +x "$temp_script"
     
-    if curl -fsSL -o "$temp_script" "$url" 2>/dev/null; then
-        print_success "下载完成"
-        chmod +x "$temp_script"
-        
-        echo ""
-        print_info "跳转到: $name"
-        echo "════════════════════════════════════════════════════════════"
-        
-        log_action "Jump to: $name ($url)"
-        
-        # exec 跳转，不返回
-        exec bash "$temp_script"
-        
+    echo ""
+    print_info "开始执行..."
+    echo "════════════════════════════════════════════════════════════"
+    
+    local start_time=$(date +%s)
+    
+    if [[ -n "$params" ]]; then
+        bash "$temp_script" $params
     else
-        print_error "下载失败，请检查网络或 URL"
-        rm -f "$temp_script"
-        echo ""
-        read -p "按回车返回..."
+        bash "$temp_script"
     fi
+    
+    local exit_code=$?
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    echo "════════════════════════════════════════════════════════════"
+    
+    if [[ $exit_code -eq 0 ]]; then
+        print_success "执行完成！(耗时: ${duration}秒)"
+    else
+        print_error "执行失败！(退出码: $exit_code)"
+    fi
+    
+    log_action "Execute script favorite: S$id - $name"
+    
+    rm -f "$temp_script"
+    
+    echo ""
+    read -p "按回车继续..."
+}
+
+delete_favorite() {
+    echo ""
+    read -p "输入要删除的编号 (如: C1 或 S2): " input
+    
+    if [[ -z "$input" ]]; then
+        print_error "编号不能为空"
+        sleep 2
+        return
+    fi
+    
+    local type="${input:0:1}"
+    local id="${input:1}"
+    
+    if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+        print_error "无效编号"
+        sleep 2
+        return
+    fi
+    
+    # 先从云端同步
+    sync_from_cloud silent
+    
+    case "${type^^}" in
+        C)
+            local found=$(jq ".commands[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+            
+            if [[ -z "$found" ]]; then
+                print_error "未找到编号: C$id"
+                sleep 2
+                return
+            fi
+            
+            local cmd=$(echo "$found" | jq -r '.command')
+            
+            echo ""
+            print_info "正在删除命令: $cmd"
+            
+            local updated=$(jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE")
+            echo "$updated" > "$CACHE_FILE"
+            
+            if sync_to_cloud silent; then
+                print_success "✓ 命令已删除"
+                print_success "✓ 已同步到云端"
+                log_action "Delete command favorite: C$id"
+            else
+                print_error "✗ 云端同步失败（已从本地删除）"
+            fi
+            ;;
+        S)
+            local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+            
+            if [[ -z "$found" ]]; then
+                print_error "未找到编号: S$id"
+                sleep 2
+                return
+            fi
+            
+            local name=$(echo "$found" | jq -r '.name')
+            
+            echo ""
+            print_info "正在删除脚本: $name"
+            
+            local updated=$(jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE")
+            echo "$updated" > "$CACHE_FILE"
+            
+            if sync_to_cloud silent; then
+                print_success "✓ 脚本已删除"
+                print_success "✓ 已同步到云端"
+                log_action "Delete script favorite: S$id"
+            else
+                print_error "✗ 云端同步失败（已从本地删除）"
+            fi
+            ;;
+        *)
+            print_error "无效编号格式，请使用 C1 或 S2 格式"
+            sleep 2
+            ;;
+    esac
+    
+    sleep 2
 }
 
 # ============================================================================
@@ -1374,7 +1403,7 @@ quick_docker_action() {
         fi
         
         ((index++))
-    done <<< "$containers"
+        done <<< "$containers"
     
     echo ""
     
@@ -1439,7 +1468,7 @@ quick_docker_action() {
 }
 
 # ============================================================================
-# Caddy 反向代理
+# Caddy 反向代理（完善版）
 # ============================================================================
 
 install_caddy() {
@@ -1480,12 +1509,26 @@ install_caddy() {
         return
     fi
     
-    # 配置 Caddy
+    # 配置 Caddy - 初始化为空配置
     mkdir -p /etc/caddy
     
     cat > /etc/caddy/Caddyfile <<'EOF'
-:8443 {
-    respond / "Caddy is running on port 8443" 200
+# Caddy 配置文件
+# 由 Tools 工具箱自动管理
+
+# 全局配置
+{
+    admin localhost:2019
+}
+
+# HTTP 入口 (用于路径模式反代)
+:80 {
+    respond / "Caddy is running" 200
+}
+
+# HTTPS 入口 (用于域名模式反代)
+:443 {
+    respond / "Caddy is running on HTTPS" 200
 }
 EOF
 
@@ -1493,6 +1536,9 @@ EOF
     systemctl enable caddy
     
     print_success "Caddy 安装完成"
+    print_info "HTTP 端口: 80"
+    print_info "HTTPS 端口: 443"
+    print_info "管理端口: 2019"
     log_action "Install Caddy"
     
     echo ""
@@ -1513,93 +1559,203 @@ add_caddy_route() {
     fi
     
     echo "选择路由模式："
-    echo "[1] 域名模式（自动 HTTPS）"
-    echo "[2] 路径模式（HTTP 转发）"
+    echo "[1] 域名模式（自动 HTTPS，推荐）"
+    echo "[2] 路径模式（HTTP 路径转发）"
     echo ""
     read -p "选择: " mode
     
-    local route_config=""
-    local route_name=""
-    
     case $mode in
         1)
-            read -p "域名（如 example.com）: " domain
-            if [[ -z "$domain" ]]; then
-                print_error "域名不能为空"
-                sleep 2
-                return
-            fi
-            
-            read -p "后端地址（如 localhost:8080）: " backend
-            if [[ -z "$backend" ]]; then
-                print_error "后端地址不能为空"
-                sleep 2
-                return
-            fi
-            
-            route_config="$domain {
-    reverse_proxy $backend
-}"
-            route_name="$domain"
+            add_domain_route
             ;;
         2)
-            read -p "路径前缀（如 /app1）: " path
-            if [[ -z "$path" || ! "$path" =~ ^/ ]]; then
-                print_error "路径必须以 / 开头"
-                sleep 2
-                return
-            fi
-            
-            read -p "后端地址（如 localhost:8080）: " backend
-            if [[ -z "$backend" ]]; then
-                print_error "后端地址不能为空"
-                sleep 2
-                return
-            fi
-            
-            route_config="    route ${path}/* {
-        uri strip_prefix ${path}
-        reverse_proxy ${backend}
-    }"
-            route_name="$path"
+            add_path_route
             ;;
         *)
             print_error "无效选择"
             sleep 2
-            return
             ;;
     esac
+}
+
+add_domain_route() {
+    echo ""
+    print_info "域名模式配置"
+    echo ""
+    
+    read -p "域名（如 example.com）: " domain
+    if [[ -z "$domain" ]]; then
+        print_error "域名不能为空"
+        sleep 2
+        return
+    fi
+    
+    read -p "Caddy 监听端口 [443]: " caddy_port
+    caddy_port=${caddy_port:-443}
+    
+    read -p "后端服务地址（如 localhost）: " backend_host
+    backend_host=${backend_host:-localhost}
+    
+    read -p "后端服务端口（如 8080）: " backend_port
+    if [[ -z "$backend_port" ]]; then
+        print_error "后端端口不能为空"
+        sleep 2
+        return
+    fi
+    
+    local backend="$backend_host:$backend_port"
     
     check_root
     
+    # 检查是否已存在该域名配置
+    if grep -q "^$domain {" /etc/caddy/Caddyfile; then
+        print_error "域名 $domain 已存在配置"
+        sleep 2
+        return
+    fi
+    
     # 添加路由到 Caddyfile
-    if [[ $mode -eq 1 ]]; then
-        echo "" >> /etc/caddy/Caddyfile
-        echo "$route_config" >> /etc/caddy/Caddyfile
+    cat >> /etc/caddy/Caddyfile <<EOF
+
+# 域名反代: $domain -> $backend
+$domain:$caddy_port {
+    reverse_proxy $backend
+}
+EOF
+
+    # 验证并重载配置
+    if caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        if systemctl reload caddy; then
+            print_success "路由添加成功"
+            echo ""
+            print_info "访问地址: https://$domain:$caddy_port"
+            print_info "后端地址: $backend"
+            
+            # 保存到本地数据
+            local new_route=$(jq -n \
+                --arg name "$domain" \
+                --arg caddy_port "$caddy_port" \
+                --arg backend "$backend" \
+                --argjson mode 1 \
+                '{name: $name, caddy_port: $caddy_port, backend: $backend, mode: $mode}')
+            
+            local updated=$(jq ".caddy_routes += [$new_route]" "$LOCAL_DATA")
+            echo "$updated" > "$LOCAL_DATA"
+            
+            log_action "Add Caddy domain route: $domain:$caddy_port -> $backend"
+        else
+            print_error "Caddy 重载失败"
+        fi
     else
-        sed -i "/^:8443 {/a\\$route_config" /etc/caddy/Caddyfile
+        print_error "配置验证失败，请检查语法"
+        # 回滚配置
+        sed -i "/# 域名反代: $domain -> $backend/,/^}/d" /etc/caddy/Caddyfile
     fi
     
-    if caddy reload --config /etc/caddy/Caddyfile 2>/dev/null; then
-        print_success "路由添加成功"
-        
-        # 保存到本地数据
-        local new_route=$(jq -n \
-            --arg name "$route_name" \
-            --arg backend "$backend" \
-            --arg mode "$mode" \
-            '{name: $name, backend: $backend, mode: ($mode | tonumber)}')
-        
-        local updated=$(jq ".caddy_routes += [$new_route]" "$LOCAL_DATA")
-        echo "$updated" > "$LOCAL_DATA"
-        
-        log_action "Add Caddy route: $route_name -> $backend"
-    else
-        print_error "配置错误，请检查语法"
-    fi
-    
+    sleep 3
+}
+
+add_path_route() {
     echo ""
-    read -p "按回车继续..."
+    print_info "路径模式配置"
+    echo ""
+    
+    read -p "路径前缀（如 /app1）: " path
+    if [[ -z "$path" || ! "$path" =~ ^/ ]]; then
+        print_error "路径必须以 / 开头"
+        sleep 2
+        return
+    fi
+    
+    read -p "Caddy 监听端口 [80]: " caddy_port
+    caddy_port=${caddy_port:-80}
+    
+    read -p "后端服务地址（如 localhost）: " backend_host
+    backend_host=${backend_host:-localhost}
+    
+    read -p "后端服务端口（如 8080）: " backend_port
+    if [[ -z "$backend_port" ]]; then
+        print_error "后端端口不能为空"
+        sleep 2
+        return
+    fi
+    
+    local backend="$backend_host:$backend_port"
+    
+    check_root
+    
+    # 检查是否已存在该路径配置
+    if grep -q "handle $path\*" /etc/caddy/Caddyfile; then
+        print_error "路径 $path 已存在配置"
+        sleep 2
+        return
+    fi
+    
+    # 在 :caddy_port 块中添加路由
+    # 如果端口块不存在，先创建
+    if ! grep -q "^:$caddy_port {" /etc/caddy/Caddyfile; then
+        cat >> /etc/caddy/Caddyfile <<EOF
+
+# HTTP 入口 - $caddy_port
+:$caddy_port {
+}
+EOF
+    fi
+    
+    # 添加路由到对应端口块
+    local route_config="    # 路径反代: $path -> $backend
+    handle $path* {
+        uri strip_prefix $path
+        reverse_proxy $backend
+    }"
+    
+    # 在端口块的最后一个 } 前插入
+    awk -v port=":$caddy_port" -v route="$route_config" '
+    BEGIN { in_block=0; block_line=0 }
+    {
+        if ($0 ~ "^" port " {") {
+            in_block=1
+            block_line=NR
+        }
+        if (in_block && $0 ~ "^}$") {
+            print route
+            in_block=0
+        }
+        print
+    }' /etc/caddy/Caddyfile > /tmp/Caddyfile.tmp && mv /tmp/Caddyfile.tmp /etc/caddy/Caddyfile
+    
+    # 验证并重载配置
+    if caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        if systemctl reload caddy; then
+            print_success "路由添加成功"
+            echo ""
+            print_info "访问地址: http://your-ip:$caddy_port$path"
+            print_info "后端地址: $backend"
+            
+            # 保存到本地数据
+            local new_route=$(jq -n \
+                --arg name "$path" \
+                --arg caddy_port "$caddy_port" \
+                --arg backend "$backend" \
+                --argjson mode 2 \
+                '{name: $name, caddy_port: $caddy_port, backend: $backend, mode: $mode}')
+            
+            local updated=$(jq ".caddy_routes += [$new_route]" "$LOCAL_DATA")
+            echo "$updated" > "$LOCAL_DATA"
+            
+            log_action "Add Caddy path route: $path on port $caddy_port -> $backend"
+        else
+            print_error "Caddy 重载失败"
+        fi
+    else
+        print_error "配置验证失败，请检查语法"
+        echo ""
+        echo "建议操作："
+        echo "  - 查看配置: cat /etc/caddy/Caddyfile"
+        echo "  - 验证配置: caddy validate --config /etc/caddy/Caddyfile"
+    fi
+    
+    sleep 3
 }
 
 manage_caddy_routes() {
@@ -1615,26 +1771,33 @@ manage_caddy_routes() {
         if [[ $route_count -eq 0 ]]; then
             print_warning "暂无路由配置"
         else
+            echo "当前路由配置："
+            echo ""
             for ((i=0; i<route_count; i++)); do
                 local name=$(jq -r ".caddy_routes[$i].name" "$LOCAL_DATA")
+                local caddy_port=$(jq -r ".caddy_routes[$i].caddy_port" "$LOCAL_DATA")
                 local backend=$(jq -r ".caddy_routes[$i].backend" "$LOCAL_DATA")
                 local mode=$(jq -r ".caddy_routes[$i].mode" "$LOCAL_DATA")
                 
                 local mode_text="路径模式"
-                [[ $mode -eq 1 ]] && mode_text="域名模式"
+                local mode_color=$CYAN
+                [[ $mode -eq 1 ]] && mode_text="域名模式" && mode_color=$MAGENTA
                 
-                echo "[$((i+1))] $name -> $backend ($mode_text)"
+                echo -e "[$((i+1))] ${mode_color}$name${NC}:$caddy_port -> $backend ($mode_text)"
             done
         fi
         
         echo ""
-        echo "[D] 删除路由    [M] 修改路由    [0] 返回"
+        echo "[D] 删除路由    [V] 查看配置文件    [E] 编辑配置文件"
+        echo "[R] 重载 Caddy  [0] 返回"
         echo ""
         read -p "选择: " choice
         
         case $choice in
             [Dd]) delete_caddy_route ;;
-            [Mm]) modify_caddy_route ;;
+            [Vv]) view_caddy_config ;;
+            [Ee]) edit_caddy_config ;;
+            [Rr]) reload_caddy ;;
             0) return ;;
         esac
     done
@@ -1654,50 +1817,143 @@ delete_caddy_route() {
     
     local index=$((num - 1))
     local name=$(jq -r ".caddy_routes[$index].name" "$LOCAL_DATA")
+    local mode=$(jq -r ".caddy_routes[$index].mode" "$LOCAL_DATA")
     
-    # 从数据中删除
-    local updated=$(jq "del(.caddy_routes[$index])" "$LOCAL_DATA")
-    echo "$updated" > "$LOCAL_DATA"
+    check_root
     
-    print_warning "请手动编辑 /etc/caddy/Caddyfile 删除对应配置"
-    print_info "然后执行: caddy reload --config /etc/caddy/Caddyfile"
-    
-    log_action "Delete Caddy route: $name"
-    
-    sleep 3
-}
-
-modify_caddy_route() {
     echo ""
-    read -p "输入要修改的路由编号: " num
+    print_info "正在删除: $name"
     
-    local route_count=$(jq '.caddy_routes | length' "$LOCAL_DATA")
-    
-    if [[ $num -lt 1 || $num -gt $route_count ]]; then
-        print_error "无效编号"
-        sleep 2
-        return
+    # 从配置文件中删除对应块
+    if [[ $mode -eq 1 ]]; then
+        # 域名模式：删除整个域名块
+        sed -i "/^# 域名反代: $name/,/^}$/d" /etc/caddy/Caddyfile
+        # 删除该域名的整个配置块
+        sed -i "/^$name.*{$/,/^}$/d" /etc/caddy/Caddyfile
+    else
+        # 路径模式：删除 handle 块
+        sed -i "/# 路径反代: $name/,/^    }$/d" /etc/caddy/Caddyfile
     fi
     
-    local index=$((num - 1))
-    local name=$(jq -r ".caddy_routes[$index].name" "$LOCAL_DATA")
-    local backend=$(jq -r ".caddy_routes[$index].backend" "$LOCAL_DATA")
+    # 验证并重载
+    if caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        if systemctl reload caddy; then
+            # 从本地数据中删除
+            local updated=$(jq "del(.caddy_routes[$index])" "$LOCAL_DATA")
+            echo "$updated" > "$LOCAL_DATA"
+            
+            print_success "路由已删除"
+            log_action "Delete Caddy route: $name"
+        else
+            print_error "Caddy 重载失败"
+        fi
+    else
+        print_error "配置验证失败"
+        echo ""
+        print_warning "建议手动编辑配置文件修复"
+    fi
+    
+    sleep 2
+}
+
+view_caddy_config() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║        Caddy 配置文件                                      ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    
+    if [[ -f /etc/caddy/Caddyfile ]]; then
+        cat /etc/caddy/Caddyfile
+    else
+        print_error "配置文件不存在"
+    fi
     
     echo ""
-    echo "当前配置: $name -> $backend"
-    read -p "新的后端地址 [$backend]: " new_backend
-    new_backend=${new_backend:-$backend}
+    read -p "按回车继续..."
+}
+
+edit_caddy_config() {
+    check_root
     
-    # 更新数据
-    local updated=$(jq ".caddy_routes[$index].backend = \"$new_backend\"" "$LOCAL_DATA")
-    echo "$updated" > "$LOCAL_DATA"
+    echo ""
+    print_warning "准备编辑配置文件"
+    print_info "保存前会自动验证配置"
+    echo ""
+    read -p "按回车继续..."
     
-    print_warning "请手动编辑 /etc/caddy/Caddyfile 修改对应配置"
-    print_info "然后执行: caddy reload --config /etc/caddy/Caddyfile"
+    # 备份配置
+    cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.backup
     
-    log_action "Modify Caddy route: $name -> $new_backend"
+    # 使用 nano 或 vi 编辑
+    if command -v nano &> /dev/null; then
+        nano /etc/caddy/Caddyfile
+    else
+        vi /etc/caddy/Caddyfile
+    fi
     
-    sleep 3
+    # 验证配置
+    echo ""
+    print_info "正在验证配置..."
+    
+    if caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        print_success "配置验证通过"
+        echo ""
+        read -p "是否重载 Caddy? [Y/n]: " confirm
+        confirm=${confirm:-Y}
+        
+        if [[ $confirm =~ ^[Yy]$ ]]; then
+            if systemctl reload caddy; then
+                print_success "Caddy 已重载"
+                log_action "Edit Caddy config and reload"
+            else
+                print_error "Caddy 重载失败"
+            fi
+        fi
+    else
+        print_error "配置验证失败！"
+        echo ""
+        read -p "是否恢复备份? [Y/n]: " restore
+        restore=${restore:-Y}
+        
+        if [[ $restore =~ ^[Yy]$ ]]; then
+            mv /etc/caddy/Caddyfile.backup /etc/caddy/Caddyfile
+            print_success "已恢复配置"
+        fi
+    fi
+    
+    sleep 2
+}
+
+reload_caddy() {
+    check_root
+    
+    echo ""
+    print_info "正在验证配置..."
+    
+    if caddy validate --config /etc/caddy/Caddyfile 2>/dev/null; then
+        print_success "配置验证通过"
+        print_info "正在重载 Caddy..."
+        
+        if systemctl reload caddy; then
+            print_success "Caddy 已重载"
+            log_action "Reload Caddy"
+        else
+            print_error "Caddy 重载失败"
+            echo ""
+            echo "建议操作："
+            echo "  - 查看状态: systemctl status caddy"
+            echo "  - 查看日志: journalctl -u caddy -n 50"
+        fi
+    else
+        print_error "配置验证失败"
+        echo ""
+        echo "建议操作："
+        echo "  - 查看配置: cat /etc/caddy/Caddyfile"
+        echo "  - 手动验证: caddy validate --config /etc/caddy/Caddyfile"
+    fi
+    
+    sleep 2
 }
 
 # ============================================================================
@@ -1853,53 +2109,6 @@ enable_root_ssh() {
 }
 
 # ============================================================================
-# 调试功能
-# ============================================================================
-
-view_cloud_debug() {
-    clear
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║        云端数据调试                                        ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    print_info "Gist ID: $GIST_ID"
-    print_info "文件名: $GIST_FILE"
-    echo ""
-    
-    print_info "正在获取云端数据..."
-    local response=$(curl -s -H "Authorization: token $GIST_TOKEN" \
-        "https://api.github.com/gists/$GIST_ID" 2>/dev/null)
-    
-    if [[ -z "$response" ]]; then
-        print_error "网络连接失败"
-    else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════"
-        echo "云端原始数据（前100行）："
-        echo "═══════════════════════════════════════════════════════════"
-        echo "$response" | jq -r ".files.\"$GIST_FILE\".content" 2>/dev/null | head -100
-        echo "═══════════════════════════════════════════════════════════"
-    fi
-    
-    echo ""
-    echo "本地缓存文件: $CACHE_FILE"
-    if [[ -f "$CACHE_FILE" ]]; then
-        echo ""
-        echo "═══════════════════════════════════════════════════════════"
-        echo "本地缓存内容："
-        echo "═══════════════════════════════════════════════════════════"
-        cat "$CACHE_FILE" | jq . 2>/dev/null || cat "$CACHE_FILE"
-        echo "═══════════════════════════════════════════════════════════"
-    else
-        print_warning "本地缓存文件不存在"
-    fi
-    
-    echo ""
-    read -p "按回车继续..."
-}
-
-# ============================================================================
 # 自更新功能
 # ============================================================================
 
@@ -2033,21 +2242,14 @@ handle_cli_args() {
             echo ""
             echo "使用方法:"
             echo "  t              打开主菜单"
-            echo "  t C            命令收藏夹"
-            echo "  t J            脚本跳转"
+            echo "  t C            命令、脚本收藏夹"
             echo "  t --help       显示帮助"
             exit 0
             ;;
         [Cc])
             init_config
             sync_from_cloud silent
-            command_favorites
-            exit 0
-            ;;
-        [Jj])
-            init_config
-            sync_from_cloud silent
-            script_jump
+            command_script_favorites
             exit 0
             ;;
         "")

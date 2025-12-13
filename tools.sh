@@ -1,37 +1,33 @@
 #!/bin/bash
 # curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
-# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.4.0
+# 版本: v2.4.1
 # 功能: Ubuntu Server 轻量运维工具箱
 # 安装位置: /usr/local/bin/t
-# 作者: Auto Generated
-# 日期: 2025-11-21
+#           /usr/local/bin/tt (粘贴并执行快捷方式)
+#           /usr/local/bin/tc (收藏夹快捷方式)
+# 作者: Auto Generated (Modified)
+# 日期: 2025-12-13
 #
 # 一键安装命令:
 # curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 #
 # 安装后使用:
 #   t              # 打开主菜单
-#   t C            # 命令、脚本收藏夹
-#   t --help       # 查看帮助
+#   tt             # 直接粘贴并执行脚本
+#   tc             # 直接打开命令/脚本收藏夹 (优先级高于系统 tc)
 ################################################################################
 
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.4.0"
+VERSION="2.4.1"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
+LINK_TT="/usr/local/bin/tt"
+LINK_TC="/usr/local/bin/tc"
 CONFIG_DIR="/etc/tools"
 LOG_DIR="/var/log/tools"
 LOCAL_DATA="$CONFIG_DIR/local.json"
@@ -215,10 +211,12 @@ main_menu() {
     while true; do
         show_system_info
         
+        # UI 更新：显示快捷键提示
         cat <<'EOF'
 
- ▸ 快捷操作（云端）
-   [T] 📝 粘贴并执行    [C] 💾 命令、脚本收藏夹
+ ▸ 快捷操作（全局快捷键: tt, tc）
+   [T/tt] 📝 粘贴并执行 (快捷命令: tt)
+   [C/tc] 💾 命令、脚本收藏夹 (快捷命令: tc)
    
  ▸ 服务与容器
    [1] 注册二进制服务
@@ -242,14 +240,18 @@ main_menu() {
 ════════════════════════════════════════════════════════════
 EOF
         
-        read -p "请选择: " choice
+        read -p "请选择 (支持 tt, tc): " choice
         
-        # 转换为大写处理
+        # 转换为大写处理 (保持 tt, tc 小写逻辑兼容)
+        local raw_choice="$choice"
         choice=$(echo "$choice" | tr '[:lower:]' '[:upper:]')
         
         case $choice in
-            T) run_script_from_paste ;;
-            C) command_script_favorites ;;
+            # 兼容 tt 和 T
+            T|TT) run_script_from_paste ;;
+            # 兼容 tc 和 C
+            C|TC) command_script_favorites ;;
+            
             1) register_binary_service ;;
             2) manage_services ;;
             2A) quick_service_action "start" ;;
@@ -283,8 +285,15 @@ EOF
                 exit 0
                 ;;
             *) 
-                print_error "无效选择"
-                sleep 1
+                # 再次检查原始输入是否为 tt 或 tc (防止大写转换带来的问题，虽已覆盖)
+                if [[ "$raw_choice" == "tt" ]]; then
+                     run_script_from_paste
+                elif [[ "$raw_choice" == "tc" ]]; then
+                     command_script_favorites
+                else
+                    print_error "无效选择"
+                    sleep 1
+                fi
                 ;;
         esac
     done
@@ -337,9 +346,10 @@ command_script_favorites() {
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
         echo "[4] 删除收藏    [0] 返回"
         echo ""
-        read -p "请选择: " choice
+        read -p "请选择 (输入 tt 粘贴执行): " choice
         
         case $choice in
+            tt|TT) run_script_from_paste ;; # 支持在此处直接 tt
             1) add_command_favorite ;;
             2) add_script_favorite ;;
             3) execute_favorite ;;
@@ -680,7 +690,7 @@ delete_favorite() {
 run_script_from_paste() {
     clear
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║        粘贴脚本内容                                        ║"
+    echo "║        粘贴脚本内容 (tt)                                   ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
     print_info "请粘贴脚本内容 (结束后按 Ctrl+D):"
@@ -902,6 +912,7 @@ manage_services() {
         read -p "选择操作: " choice
         
         case $choice in
+            tt|TT) run_script_from_paste ;; # 支持在此处直接 tt
             [Ss]) service_action "start" ;;
             [Pp]) service_action "stop" ;;
             [Rr]) service_action "restart" ;;
@@ -1441,7 +1452,7 @@ quick_docker_action() {
             else
                 print_error "${action_text}失败"
             fi
-            sleep 1
+            sleep 2
             ;;
         rm)
             echo ""
@@ -2180,6 +2191,10 @@ update_script() {
     chmod +x "$temp_script"
     mv "$temp_script" "$INSTALL_PATH"
     
+    # 更新软链接（防止丢失）
+    ln -sf "$INSTALL_PATH" "$LINK_TT"
+    ln -sf "$INSTALL_PATH" "$LINK_TC"
+    
     print_success "✓ 更新完成！"
     print_info "备份文件: $INSTALL_PATH.backup-$VERSION"
     
@@ -2220,11 +2235,19 @@ check_and_install() {
             cp "$SCRIPT_PATH" "$INSTALL_PATH"
             chmod +x "$INSTALL_PATH"
             
+            # 创建快捷键软链接
+            print_info "创建快捷键 tt 和 tc..."
+            ln -sf "$INSTALL_PATH" "$LINK_TT"
+            ln -sf "$INSTALL_PATH" "$LINK_TC"
+            
             init_config
             
             print_success "安装完成！"
             echo ""
-            echo "使用命令: t"
+            echo "使用命令:"
+            echo "  t   - 打开主菜单"
+            echo "  tt  - 快速粘贴执行"
+            echo "  tc  - 快速打开收藏夹"
             echo ""
             exit 0
         fi
@@ -2242,11 +2265,16 @@ handle_cli_args() {
             echo ""
             echo "使用方法:"
             echo "  t              打开主菜单"
-            echo "  t C            命令、脚本收藏夹"
+            echo "  tt             快速粘贴并执行"
+            echo "  tc             快速打开命令、脚本收藏夹"
             echo "  t --help       显示帮助"
             exit 0
             ;;
-        [Cc])
+        [Tt][Tt])
+            run_script_from_paste
+            exit 0
+            ;;
+        [Cc]|[Tt][Cc])
             init_config
             sync_from_cloud silent
             command_script_favorites
@@ -2276,6 +2304,18 @@ main() {
     
     check_and_install
     init_config
+    
+    # 检查是否通过快捷链接调用
+    local script_name=$(basename "$0")
+    if [[ "$script_name" == "tt" ]]; then
+        run_script_from_paste
+        exit 0
+    elif [[ "$script_name" == "tc" ]]; then
+        init_config
+        sync_from_cloud silent
+        command_script_favorites
+        exit 0
+    fi
     
     if [[ $# -gt 0 ]]; then
         handle_cli_args "$@"

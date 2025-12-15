@@ -3,19 +3,19 @@
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.4.2 (Optimized)
+# 版本: v2.5.0 (Enhanced Sync)
 # 功能: Ubuntu Server 轻量运维工具箱
 # 安装位置: /usr/local/bin/t
 #           /usr/local/bin/tt (粘贴并执行快捷方式)
 #           /usr/local/bin/tc (收藏夹快捷方式)
 # 作者: Auto Generated (Modified)
-# 日期: 2025-12-14
+# 日期: 2025-12-15
 ################################################################################
 
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.4.2"
+VERSION="2.5.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 LINK_TT="/usr/local/bin/tt"
@@ -76,7 +76,7 @@ log_action() {
 }
 
 # ============================================================================
-# 云端数据同步 (Gist)
+# 云端数据同步 (Gist) - 增强版
 # ============================================================================
 
 sync_from_cloud() {
@@ -94,7 +94,7 @@ sync_from_cloud() {
     local content=$(echo "$response" | jq -r ".files.\"$GIST_FILE\".content" 2>/dev/null)
     
     if [[ -z "$content" || "$content" == "null" ]]; then
-        [[ "$silent" != "silent" ]] && print_warning "云端数据为空，初始化中..."
+        [[ "$silent" != "silent" ]] && print_warning "云端主数据为空，初始化中..."
         init_cloud_data
         return 1
     fi
@@ -114,8 +114,9 @@ sync_to_cloud() {
     fi
     
     local content=$(cat "$CACHE_FILE" | jq -Rs .)
-    local update_data="{\"files\": {\"$GIST_FILE\": {\"content\": $content}}}"
     
+    # --- 尝试 1: 更新主文件 ---
+    local update_data="{\"files\": {\"$GIST_FILE\": {\"content\": $content}}}"
     local response=$(curl -s -X PATCH \
         -H "Authorization: token $GIST_TOKEN" \
         -H "Content-Type: application/json" \
@@ -127,8 +128,27 @@ sync_to_cloud() {
         log_action "Synced to cloud"
         return 0
     else
-        [[ "$silent" != "silent" ]] && print_error "推送失败"
-        return 1
+        # --- 尝试 2: 主文件失败，新建备份文件 ---
+        [[ "$silent" != "silent" ]] && print_warning "主文件上传失败，尝试新建备份文件..."
+        
+        local timestamp=$(date +%Y%m%d-%H%M%S)
+        local new_filename="tools-data-${timestamp}.json"
+        local backup_data="{\"files\": {\"$new_filename\": {\"content\": $content}}}"
+        
+        local backup_response=$(curl -s -X PATCH \
+            -H "Authorization: token $GIST_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$backup_data" \
+            "https://api.github.com/gists/$GIST_ID" 2>/dev/null)
+            
+        if echo "$backup_response" | grep -q "\"id\""; then
+             print_success "已保存为新文件: $new_filename"
+             log_action "Synced to new file: $new_filename"
+             return 0
+        else
+             [[ "$silent" != "silent" ]] && print_error "推送失败 (可能权限不足或空间已满)"
+             return 1
+        fi
     fi
 }
 
@@ -175,7 +195,7 @@ upload_script_to_repo() {
     local remote_sha=$(echo "$file_info" | jq -r .sha)
 
     if [[ "$remote_sha" == "null" || -z "$remote_sha" ]]; then
-        print_error "获取远程文件信息失败 (可能权限不足或文件不存在)"
+        print_error "获取远程文件信息失败"
         read -p "按回车继续..."
         return
     fi
@@ -230,7 +250,6 @@ show_system_info() {
 }
 
 main_menu() {
-    # 仅首次进入时自动同步
     if [[ "$IS_SYNCED" == "false" ]]; then
         sync_from_cloud silent
         IS_SYNCED="true"
@@ -263,7 +282,6 @@ EOF
         local raw_choice="$choice"
         choice=$(echo "$choice" | tr '[:lower:]' '[:upper:]')
         
-        # 支持直接输入 C1 / S2
         if [[ "$choice" =~ ^[CS][0-9]+$ ]]; then
             execute_direct_by_string "$choice"
             continue
@@ -297,7 +315,7 @@ EOF
 }
 
 # ============================================================================
-# [C] 收藏夹 (高性能版)
+# [C] 收藏夹 (Enhanced)
 # ============================================================================
 
 command_script_favorites() {
@@ -315,7 +333,6 @@ command_script_favorites() {
         if [[ "$has_data" == "0" || -z "$has_data" ]]; then
             print_warning "暂无数据 (按 R 刷新)"
         else
-            # 批量渲染命令 (仅一次 jq 调用)
             local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$cmd_list" ]]; then
                 echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
@@ -325,7 +342,6 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本 (仅一次 jq 调用)
             local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$script_list" ]]; then
                 echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
@@ -337,12 +353,12 @@ command_script_favorites() {
         fi
         
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
-        echo "[4] 删除收藏    [R] 🔄 刷新云端 [U] ☁️ 上传脚本到Repo"
+        echo "[4] 删除收藏    [5] 🔢 重排编号 [6] 📥 下载脚本"
+        echo "[R] 🔄 刷新云端 [U] ☁️ 上传脚本到Repo"
         echo "[0] 返回"
         echo ""
         read -p "请选择 (支持 tt, C1): " choice
         
-        # 菜单内直接支持 C1/S1
         if [[ "$choice" =~ ^[Cc][0-9]+$ ]] || [[ "$choice" =~ ^[Ss][0-9]+$ ]]; then
              execute_direct_by_string "$choice"
              continue
@@ -354,6 +370,8 @@ command_script_favorites() {
             2) add_script_favorite ;;
             3) execute_favorite ;;
             4) delete_favorite ;;
+            5) renumber_favorites ;;
+            6) download_script_favorite ;;
             [Rr]) 
                 sync_from_cloud 
                 IS_SYNCED="true"
@@ -408,6 +426,56 @@ add_script_favorite() {
     sleep 1
 }
 
+renumber_favorites() {
+    echo ""
+    print_info "正在重排本地数据编号..."
+    
+    if [[ ! -f "$CACHE_FILE" ]]; then print_error "无数据"; return; fi
+
+    jq '
+    .commands |= (sort_by(.id) | to_entries | map(.value.id = .key + 1 | .value)) |
+    .scripts  |= (sort_by(.id) | to_entries | map(.value.id = .key + 1 | .value))
+    ' "$CACHE_FILE" > "${CACHE_FILE}.tmp"
+
+    if [[ -s "${CACHE_FILE}.tmp" ]]; then
+        mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+        print_success "本地重排完成"
+        sync_to_cloud
+    else
+        print_error "重排失败，数据格式可能错误"
+        rm -f "${CACHE_FILE}.tmp"
+    fi
+    sleep 1
+}
+
+download_script_favorite() {
+    echo ""
+    echo -e "${MAGENTA}═══ 下载收藏脚本 ═══${NC}"
+    read -p "输入脚本编号 (如 S1): " input
+    local id="${input#*[Ss]}"
+    [[ ! "$id" =~ ^[0-9]+$ ]] && return
+
+    local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$found" ]]; then print_error "未找到 S$id"; sleep 1; return; fi
+
+    local name=$(echo "$found" | jq -r '.name')
+    local content=$(echo "$found" | jq -r '.content')
+    
+    local filename=$(echo "$name" | sed 's/[^a-zA-Z0-9._-]/_/g').sh
+    read -p "保存文件名 [$filename]: " user_name
+    filename=${user_name:-$filename}
+
+    if [[ -f "$filename" ]]; then
+        read -p "文件已存在，覆盖吗? [y/N]: " confirm
+        [[ ! "$confirm" =~ ^[Yy]$ ]] && return
+    fi
+
+    echo "$content" > "$filename" && chmod +x "$filename"
+    print_success "已导出至: $(pwd)/$filename"
+    echo ""
+    read -p "按回车继续..."
+}
+
 execute_favorite() {
     echo ""
     read -p "输入编号 (如 C1, S2): " input
@@ -457,7 +525,7 @@ delete_favorite() {
 }
 
 # ============================================================================
-# 其他原有功能 (保留)
+# 其他原有功能
 # ============================================================================
 
 run_script_from_paste() {
@@ -568,7 +636,6 @@ handle_cli_args() {
         [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
         [Cc][0-9]*|[Ss][0-9]*)
             init_config
-            # 直接执行时静默同步一次以确保ID最新，如果追求极致速度可注释下行
             sync_from_cloud silent 
             execute_direct_by_string "$1"
             exit 0

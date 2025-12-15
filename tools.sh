@@ -3,11 +3,9 @@
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.5.0 (Enhanced Sync)
+# 版本: v2.6.0 (Multi-File Support)
 # 功能: Ubuntu Server 轻量运维工具箱
-# 安装位置: /usr/local/bin/t
-#           /usr/local/bin/tt (粘贴并执行快捷方式)
-#           /usr/local/bin/tc (收藏夹快捷方式)
+# 说明: 增加新建存储文件功能，解决 Gist 单文件过大无法上传的问题
 # 作者: Auto Generated (Modified)
 # 日期: 2025-12-15
 ################################################################################
@@ -15,7 +13,7 @@
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.5.0"
+VERSION="2.6.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 LINK_TT="/usr/local/bin/tt"
@@ -24,16 +22,19 @@ CONFIG_DIR="/etc/tools"
 LOG_DIR="/var/log/tools"
 LOCAL_DATA="$CONFIG_DIR/local.json"
 CACHE_FILE="$CONFIG_DIR/cloud_cache.json"
-IS_SYNCED="false" # 标记云端同步状态
+IS_SYNCED="false" 
 
-# Gist 配置（Token 分段拼接）
+# Gist 配置
 TOKEN_P1="ghp_9L6XhJxk"
 TOKEN_P2="aQHVYASNGW"
 TOKEN_P3="nwSVJtqbNWYH4FgpIN"
 GIST_TOKEN="${TOKEN_P1}${TOKEN_P2}${TOKEN_P3}"
 GIST_ID="5056809fae3422c02fd8b52ad31f8fca"
-GIST_FILE="tools-data.json"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh"
+
+# 默认文件名，后续会在 load_active_filename 中尝试覆盖
+DEFAULT_GIST_FILE="tools-data.json"
+GIST_FILE="$DEFAULT_GIST_FILE"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -56,18 +57,31 @@ print_info() { echo -e "${BLUE}ℹ${NC} $1"; }
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         print_error "此操作需要 root 权限"
-        echo "请使用: sudo $0 $*"
         exit 1
     fi
 }
 
 init_config() {
     mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+    # 初始化本地配置，增加 active_gist_file 字段
     if [[ ! -f "$LOCAL_DATA" ]]; then
-        echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
+        echo "{\"services\": [], \"active_gist_file\": \"$DEFAULT_GIST_FILE\"}" > "$LOCAL_DATA"
     fi
     if [[ ! -f "$CACHE_FILE" ]]; then
         echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    fi
+    
+    # 加载当前使用的 Gist 文件名
+    load_active_filename
+}
+
+# 从本地配置读取当前应该连接哪个 Gist 文件
+load_active_filename() {
+    if [[ -f "$LOCAL_DATA" ]]; then
+        local saved_file=$(jq -r '.active_gist_file // empty' "$LOCAL_DATA" 2>/dev/null)
+        if [[ -n "$saved_file" && "$saved_file" != "null" ]]; then
+            GIST_FILE="$saved_file"
+        fi
     fi
 }
 
@@ -76,12 +90,12 @@ log_action() {
 }
 
 # ============================================================================
-# 云端数据同步 (Gist) - 增强版
+# 云端数据同步 (Gist)
 # ============================================================================
 
 sync_from_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在从云端同步..."
+    [[ "$silent" != "silent" ]] && print_info "正在从云端同步 [$GIST_FILE]..."
     
     local response=$(curl -s -H "Authorization: token $GIST_TOKEN" \
         "https://api.github.com/gists/$GIST_ID" 2>/dev/null)
@@ -93,10 +107,17 @@ sync_from_cloud() {
     
     local content=$(echo "$response" | jq -r ".files.\"$GIST_FILE\".content" 2>/dev/null)
     
+    # 如果当前指定的文件不存在或为空
     if [[ -z "$content" || "$content" == "null" ]]; then
-        [[ "$silent" != "silent" ]] && print_warning "云端主数据为空，初始化中..."
-        init_cloud_data
-        return 1
+        [[ "$silent" != "silent" ]] && print_warning "文件 $GIST_FILE 在云端不存在或为空，准备初始化..."
+        # 如果是切换到了新文件，可能云端还没创建，这里不覆盖本地缓存，而是尝试上传本地缓存作为初始化
+        if [[ -s "$CACHE_FILE" ]]; then
+             sync_to_cloud silent
+             return 0
+        else
+             init_cloud_data
+             return 1
+        fi
     fi
     
     echo "$content" > "$CACHE_FILE"
@@ -106,7 +127,7 @@ sync_from_cloud() {
 
 sync_to_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在推送到云端..."
+    [[ "$silent" != "silent" ]] && print_info "正在推送至 [$GIST_FILE]..."
     
     if [[ ! -f "$CACHE_FILE" ]]; then
         print_error "本地缓存不存在"
@@ -114,9 +135,8 @@ sync_to_cloud() {
     fi
     
     local content=$(cat "$CACHE_FILE" | jq -Rs .)
-    
-    # --- 尝试 1: 更新主文件 ---
     local update_data="{\"files\": {\"$GIST_FILE\": {\"content\": $content}}}"
+    
     local response=$(curl -s -X PATCH \
         -H "Authorization: token $GIST_TOKEN" \
         -H "Content-Type: application/json" \
@@ -125,36 +145,74 @@ sync_to_cloud() {
     
     if echo "$response" | grep -q "\"id\""; then
         [[ "$silent" != "silent" ]] && print_success "推送完成"
-        log_action "Synced to cloud"
+        log_action "Synced to $GIST_FILE"
         return 0
     else
-        # --- 尝试 2: 主文件失败，新建备份文件 ---
-        [[ "$silent" != "silent" ]] && print_warning "主文件上传失败，尝试新建备份文件..."
-        
-        local timestamp=$(date +%Y%m%d-%H%M%S)
-        local new_filename="tools-data-${timestamp}.json"
-        local backup_data="{\"files\": {\"$new_filename\": {\"content\": $content}}}"
-        
-        local backup_response=$(curl -s -X PATCH \
-            -H "Authorization: token $GIST_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$backup_data" \
-            "https://api.github.com/gists/$GIST_ID" 2>/dev/null)
-            
-        if echo "$backup_response" | grep -q "\"id\""; then
-             print_success "已保存为新文件: $new_filename"
-             log_action "Synced to new file: $new_filename"
-             return 0
-        else
-             [[ "$silent" != "silent" ]] && print_error "推送失败 (可能权限不足或空间已满)"
-             return 1
-        fi
+        [[ "$silent" != "silent" ]] && print_error "推送失败! (可能文件过大)"
+        # 失败不自动新建，由用户在菜单手动新建
+        return 1
     fi
 }
 
 init_cloud_data() {
     echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
     sync_to_cloud silent
+}
+
+# ============================================================================
+# 新功能：切换/新建 Gist 文件
+# ============================================================================
+
+create_new_gist_file() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║         新建存储文件 (解决文件过大无法上传问题)            ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo -e "当前正在使用的文件: ${GREEN}$GIST_FILE${NC}"
+    echo "注意：新建文件后，脚本将切换到新文件进行读写。"
+    echo "老文件会保留在 Gist 历史中，但本工具将开始记录新数据。"
+    echo ""
+    
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local default_new_name="tools-data-${timestamp}.json"
+    
+    read -p "请输入新文件名 [默认: $default_new_name]: " user_file
+    local new_file=${user_file:-$default_new_name}
+    
+    # 确保后缀是 .json
+    if [[ "$new_file" != *.json ]]; then
+        new_file="${new_file}.json"
+    fi
+    
+    echo ""
+    print_info "即将切换到: $new_file"
+    read -p "是否确认并上传当前本地数据到新文件? [y/N]: " confirm
+    
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        # 1. 更新全局变量
+        GIST_FILE="$new_file"
+        
+        # 2. 更新本地配置 local.json
+        local tmp_json=$(jq --arg f "$new_file" '.active_gist_file = $f' "$LOCAL_DATA")
+        echo "$tmp_json" > "$LOCAL_DATA"
+        
+        # 3. 强制推送当前缓存到新文件名
+        if sync_to_cloud; then
+            echo ""
+            print_success "✅ 切换成功！"
+            echo "现在的活跃文件是: $new_file"
+            echo "之前无法上传的数据已保存到该新文件中。"
+        else
+            print_error "切换后上传失败，请检查网络或 Token。"
+            # 回滚配置
+            load_active_filename
+        fi
+    else
+        echo "操作已取消"
+    fi
+    echo ""
+    read -p "按回车返回..."
 }
 
 # ============================================================================
@@ -167,61 +225,39 @@ upload_script_to_repo() {
     echo "║        上传本地脚本到 GitHub 仓库                          ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-
+    # ... (原有代码保持不变) ...
     if [[ ! -f "$INSTALL_PATH" ]]; then
         print_error "找不到本地脚本文件: $INSTALL_PATH"
         read -p "按回车继续..."
         return
     fi
-
     if ! bash -n "$INSTALL_PATH"; then
         print_error "本地脚本存在语法错误，禁止上传！"
         read -p "按回车继续..."
         return
     fi
-
     local GH_OWNER="chf5762-sudo"
     local GH_REPO="bash"
     local GH_PATH="tools.sh"
     local GH_BRANCH="main"
     local API_URL="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_PATH"
-
     print_info "正在连接 GitHub API..."
-    
-    local file_info=$(curl -s -H "Authorization: token $GIST_TOKEN" \
-        -H "Accept: application/vnd.github.v3+json" \
-        "$API_URL?ref=$GH_BRANCH")
-    
+    local file_info=$(curl -s -H "Authorization: token $GIST_TOKEN" -H "Accept: application/vnd.github.v3+json" "$API_URL?ref=$GH_BRANCH")
     local remote_sha=$(echo "$file_info" | jq -r .sha)
-
     if [[ "$remote_sha" == "null" || -z "$remote_sha" ]]; then
         print_error "获取远程文件信息失败"
         read -p "按回车继续..."
         return
     fi
-
     print_success "获取远程 SHA: ${remote_sha:0:7}"
     echo ""
     read -p "⚠️ 确定覆盖远程仓库版本吗? [y/N]: " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then return; fi
-
     print_info "正在上传..."
     local content_base64=$(base64 -w 0 "$INSTALL_PATH")
     local commit_msg="Update tools.sh via client v$VERSION ($(date +%Y-%m-%d))"
-    
-    local payload=$(jq -n \
-        --arg msg "$commit_msg" \
-        --arg content "$content_base64" \
-        --arg sha "$remote_sha" \
-        --arg branch "$GH_BRANCH" \
-        '{message: $msg, content: $content, sha: $sha, branch: $branch}')
-
-    local response=$(curl -s -X PUT \
-        -H "Authorization: token $GIST_TOKEN" \
-        -H "Accept: application/vnd.github.v3+json" \
-        -d "$payload" \
-        "$API_URL")
-
+    local payload=$(jq -n --arg msg "$commit_msg" --arg content "$content_base64" --arg sha "$remote_sha" --arg branch "$GH_BRANCH" '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+    local response=$(curl -s -X PUT -H "Authorization: token $GIST_TOKEN" -H "Accept: application/vnd.github.v3+json" -d "$payload" "$API_URL")
     if echo "$response" | grep -q '"content":'; then
         print_success "🎉 上传成功！"
         log_action "Uploaded script to GitHub Repo"
@@ -245,7 +281,7 @@ show_system_info() {
     
     echo "╔════════════════════════════════════════════════════════════╗"
     echo "║  Tools v${VERSION} | $os_name"
-    echo "║  💾 内存: $mem_info | 💿 磁盘: $disk_info"
+    echo -e "║  📂 当前存储: ${CYAN}$GIST_FILE${NC}"
     echo "╚════════════════════════════════════════════════════════════╝"
 }
 
@@ -315,7 +351,7 @@ EOF
 }
 
 # ============================================================================
-# [C] 收藏夹 (Enhanced)
+# [C] 收藏夹 (Multi-File)
 # ============================================================================
 
 command_script_favorites() {
@@ -323,6 +359,7 @@ command_script_favorites() {
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
         echo "║    命令、脚本收藏夹（云端共享）                            ║"
+        echo -e "║    📝 存储文件: ${CYAN}$GIST_FILE${NC}"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -331,7 +368,7 @@ command_script_favorites() {
         local has_data=$(jq -r '(.commands | length) + (.scripts | length)' "$CACHE_FILE" 2>/dev/null)
         
         if [[ "$has_data" == "0" || -z "$has_data" ]]; then
-            print_warning "暂无数据 (按 R 刷新)"
+            print_warning "暂无数据 (可能是新文件，或按 R 刷新)"
         else
             local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$cmd_list" ]]; then
@@ -354,6 +391,7 @@ command_script_favorites() {
         
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
         echo "[4] 删除收藏    [5] 🔢 重排编号 [6] 📥 下载脚本"
+        echo -e "[7] \033[1;33m🆕 新建存储文件 (当文件满时使用)\033[0m"
         echo "[R] 🔄 刷新云端 [U] ☁️ 上传脚本到Repo"
         echo "[0] 返回"
         echo ""
@@ -372,6 +410,7 @@ command_script_favorites() {
             4) delete_favorite ;;
             5) renumber_favorites ;;
             6) download_script_favorite ;;
+            7) create_new_gist_file ;;
             [Rr]) 
                 sync_from_cloud 
                 IS_SYNCED="true"

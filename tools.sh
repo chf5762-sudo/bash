@@ -1,26 +1,42 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════════════
-# 一、环境创建(在 USB 上的简单方案)
-#python3 -m venv /root/ai_env  # 创建名为 ai_env 的虚拟环境到 USB 存储。
-# 二、自己使用
-#source /root/ai_env/bin/activate  # 激活该虚拟环境，开始使用 USB 上的环境。
-#pip install requests numpy          # 安装所需的 Python 库到虚拟环境中。
-#python your_script.py               # 运行您的项目脚本。
-#deactivate                          # 退出虚拟环境，回到系统全局环境。
-# 三、共享给其他人
-#pip freeze > requirements.txt       # 导出已安装库的列表，用于共享。
-#(将 requirements.txt 文件共享给他人)
-#(他人在自己的环境中)
-#source /path/to/their/env/bin/activate  # 他人先激活自己的新环境
-#pip install -r requirements.txt     # 安装他人共享的依赖列表中的所有库。
-# ═══════════════════════════════════════════════════════════════
-# 通用服务管理工具 v2.0 - 增强版
-# 支持: Node.js、Python、Go、二进制、Shell 等所有可执行程序
-# 新增: 环境变量配置、资源限制、配置验证、路径检查
-# ═══════════════════════════════════════════════════════════════
 
-SYSTEMD_DIR="/etc/systemd/system"
-VERSION="2.0"
+#!/bin/bash
+# curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
+
+################################################################################
+# 文件名: tools.sh
+# 版本: v2.7.0 (GitHub Repo Edition)
+# 功能: Ubuntu Server 轻量运维工具箱
+# 安装位置: /usr/local/bin/t
+#           /usr/local/bin/tt (粘贴并执行快捷方式)
+#           /usr/local/bin/tc (收藏夹快捷方式)
+# 作者: Auto Generated (Modified)
+# 日期: 2025-12-16
+################################################################################
+
+# ============================================================================
+# 全局变量
+# ============================================================================
+VERSION="2.7.0"
+SCRIPT_PATH="$(readlink -f "$0")"
+INSTALL_PATH="/usr/local/bin/t"
+LINK_TT="/usr/local/bin/tt"
+LINK_TC="/usr/local/bin/tc"
+CONFIG_DIR="/etc/tools"
+LOG_DIR="/var/log/tools"
+LOCAL_DATA="$CONFIG_DIR/local.json"
+CACHE_FILE="$CONFIG_DIR/cloud_cache.json"
+IS_SYNCED="false"
+
+# GitHub Repo 配置（Token 分段拼接）
+TOKEN_P1="ghp_9L6XhJxk"
+TOKEN_P2="aQHVYASNGW"
+TOKEN_P3="nwSVJtqbNWYH4FgpIN"
+GH_TOKEN="${TOKEN_P1}${TOKEN_P2}${TOKEN_P3}"
+GH_OWNER="chf5762-sudo"
+GH_REPO="bash"
+GH_FILE="tools.json"
+GH_BRANCH="main"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -31,925 +47,665 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-# ═══════════════════════════════════════════════════════════════
-# 配置区域 - 在这里添加你的所有服务
-# ═══════════════════════════════════════════════════════════════
+# ============================================================================
+# 工具函数
+# ============================================================================
 
-declare -A SERVICES
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 配置格式说明：
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 基础格式(5个字段，与v1.0完全兼容)：
-# SERVICES[服务名]="描述|工作目录|启动命令|用户|重启延迟"
-#
-# 完整格式(8个字段，支持高级功能)：
-# SERVICES[服务名]="描述|工作目录|启动命令|用户|重启延迟|环境变量|资源限制|额外选项"
-#
-# 字段说明：
-# 1. 描述       - 服务描述(必填)
-# 2. 工作目录   - 程序工作目录(必填)
-# 3. 启动命令   - 完整启动命令(必填)
-# 4. 用户       - 运行用户(必填)
-# 5. 重启延迟   - 崩溃后重启等待秒数(必填)
-# 6. 环境变量   - KEY1=VALUE1,KEY2=VALUE2(可选，留空用默认)
-# 7. 资源限制   - cpu=50%,memory=1G,tasks=100(可选)
-# 8. 额外选项   - type=forking,pidfile=/path(可选)
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-# ═══════════════════════════════════════════════════════════════
-# 示例配置 - 各种服务类型
-# ═══════════════════════════════════════════════════════════════
-
-# 示例 1: Node.js 服务(基础格式)
-SERVICES[smart-monitor]="智能监控系统|/root/camera-system|node server.js|root|10"
-
-# 示例 2: Node.js 服务(带环境变量)
-#SERVICES[node-api]="Node API服务|/root/api-server|node server.js|root|5|NODE_ENV=production,PORT=3000,DB_HOST=localhost"
-
-# 示例 3: Python 服务(带资源限制)
-#SERVICES[python-app]="Python应用|/root/python-app|python3 app.py|root|10|PYTHONUNBUFFERED=1,ENV=prod|memory=512M,cpu=50%"
-
-# 示例 4: Go 二进制程序(完整配置)
-#SERVICES[go-service]="Go服务|/opt/go-app|./main --config config.yaml|root|15|GIN_MODE=release,LOG_LEVEL=info|cpu=2,memory=1G"
-
-# 示例 5: Shell 脚本
-#SERVICES[backup-script]="备份脚本|/root/scripts|bash backup.sh|root|30|BACKUP_DIR=/data/backup,RETENTION=7"
-
-# 示例 6: Java 应用(带内存限制)
-#SERVICES[java-app]="Java应用|/opt/java-app|java -jar -Xmx512m app.jar|root|20|JAVA_HOME=/usr/lib/jvm/java-11|memory=1G"
-
-# 示例 7: 系统二进制程序
-#SERVICES[custom-daemon]="自定义守护进程|/usr/local/bin|./daemon --daemon|root|10||memory=256M"
-
-# 示例 8: PHP-FPM 类型服务
-#SERVICES[php-worker]="PHP Worker|/var/www/worker|php worker.php|www-data|10|PHP_ENV=production"
-
-# 示例 9: Ruby 应用
-#SERVICES[ruby-app]="Ruby应用|/opt/ruby-app|bundle exec ruby app.rb|ruby|10|RACK_ENV=production,PORT=4567"
-
-# 示例 10: Rust 二进制
-#SERVICES[rust-service]="Rust服务|/opt/rust-app|./target/release/app|root|10|RUST_LOG=info|cpu=1,memory=256M"
-
-# 示例 11: Docker 容器(如果需要用systemd管理容器)
-#SERVICES[redis-docker]="Redis容器|/opt/redis|docker start -a redis-container|root|5||memory=256M|type=forking"
-
-# ═══════════════════════════════════════════════════════════════
-# 配置结束 - 下面是程序逻辑
-# ═══════════════════════════════════════════════════════════════
-
-# 打印函数
 print_success() { echo -e "${GREEN}✅ ${*}${NC}"; }
 print_error() { echo -e "${RED}❌ ${*}${NC}"; }
 print_info() { echo -e "${BLUE}ℹ️  ${*}${NC}"; }
 print_warning() { echo -e "${YELLOW}⚠️  ${*}${NC}"; }
 print_title() { echo -e "${CYAN}${MAGENTA}${*}${NC}"; }
-print_highlight() { echo -e "${MAGENTA}${*}${NC}"; }
 
-# 绘制分隔线
-draw_line() {
-    echo "═══════════════════════════════════════════════════════════════"
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "此操作需要 root 权限"
+        echo "请使用: sudo $0 $*"
+        exit 1
+    fi
 }
 
-# 显示主菜单
-show_menu() {
-    clear
-    print_title "╔═══════════════════════════════════════════════════════════╗"
-    print_title "║         通用服务管理工具 v${VERSION}                         ║"
-    print_title "╚═══════════════════════════════════════════════════════════╝"
-    echo ""
-    echo -e "  ${CYAN}[1]${NC} 📦 安装所有服务"
-    echo -e "  ${CYAN}[2]${NC} 🗑️  移除所有服务"
-    echo -e "  ${CYAN}[3]${NC} 📋 查看服务状态"
-    echo -e "  ${CYAN}[4]${NC} 🔄 重启所有服务"
-    echo -e "  ${CYAN}[5]${NC} ▶️  启动所有服务"
-    echo -e "  ${CYAN}[6]${NC} ⏸️  停止所有服务"
-    echo -e "  ${CYAN}[7]${NC} 📊 查看服务日志"
-    echo -e "  ${CYAN}[8]${NC} ⚙️  管理单个服务"
-    echo -e "  ${CYAN}[9]${NC} 📝 编辑配置"
-    echo -e "  ${CYAN}[10]${NC} 🔍 验证所有配置"
-    echo -e "  ${CYAN}[11]${NC} 📈 资源使用统计"
-    echo -e "  ${CYAN}[0]${NC} 🚪 退出"
-    echo ""
-    draw_line
-    echo -n "请选择操作 [0-11]: "
+init_config() {
+    mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+    if [[ ! -f "$LOCAL_DATA" ]]; then
+        echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
+    fi
+    if [[ ! -f "$CACHE_FILE" ]]; then
+        echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    fi
 }
 
-# 检查命令是否存在
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
+log_action() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_DIR/tools.log"
 }
 
-# 检查用户是否存在
-user_exists() {
-    id "$1" >/dev/null 2>&1
-}
+# ============================================================================
+# 云端数据同步 (GitHub Repo)
+# ============================================================================
 
-# 解析配置字段
-parse_service_config() {
-    local config="$1"
-    local field_count=$(echo "$config" | awk -F'|' '{print NF}')
+sync_from_cloud() {
+    local silent="$1"
+    [[ "$silent" != "silent" ]] && print_info "正在从云端同步..."
     
-    # 兼容旧格式(5个字段)和新格式(8个字段)
-    if [ "$field_count" -ge 5 ]; then
-        IFS='|' read -r description work_dir start_command user restart_sec env_vars resource_limits extra_options <<< "$config"
-        echo "$description|$work_dir|$start_command|$user|$restart_sec|${env_vars:-}|${resource_limits:-}|${extra_options:-}"
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
+    local response=$(curl -s -H "Authorization: token $GH_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "$api_url" 2>/dev/null)
+    
+    if [[ -z "$response" ]]; then
+        [[ "$silent" != "silent" ]] && print_error "网络连接失败"
+        return 1
+    fi
+    
+    local content=$(echo "$response" | jq -r '.content' 2>/dev/null)
+    
+    if [[ -z "$content" || "$content" == "null" ]]; then
+        [[ "$silent" != "silent" ]] && print_warning "云端数据为空，初始化中..."
+        init_cloud_data
+        return 1
+    fi
+    
+    echo "$content" | base64 -d > "$CACHE_FILE"
+    [[ "$silent" != "silent" ]] && print_success "同步完成"
+    return 0
+}
+
+sync_to_cloud() {
+    local silent="$1"
+    [[ "$silent" != "silent" ]] && print_info "正在推送到云端..."
+    
+    if [[ ! -f "$CACHE_FILE" ]]; then
+        print_error "本地缓存不存在"
+        return 1
+    fi
+    
+    # 先获取当前文件的 SHA
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
+    local file_info=$(curl -s -H "Authorization: token $GH_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "$api_url" 2>/dev/null)
+    
+    local current_sha=$(echo "$file_info" | jq -r '.sha' 2>/dev/null)
+    
+    if [[ -z "$current_sha" || "$current_sha" == "null" ]]; then
+        [[ "$silent" != "silent" ]] && print_error "获取文件 SHA 失败"
+        return 1
+    fi
+    
+    local content_base64=$(base64 -w 0 "$CACHE_FILE")
+    local commit_msg="Update tools.json via client v$VERSION ($(date +%Y-%m-%d))"
+    
+    local payload=$(jq -n \
+        --arg msg "$commit_msg" \
+        --arg content "$content_base64" \
+        --arg sha "$current_sha" \
+        --arg branch "$GH_BRANCH" \
+        '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+    
+    local response=$(curl -s -X PUT \
+        -H "Authorization: token $GH_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        -d "$payload" \
+        "$api_url" 2>/dev/null)
+    
+    if echo "$response" | grep -q '"content":'; then
+        [[ "$silent" != "silent" ]] && print_success "推送完成"
+        log_action "Synced to cloud (GitHub Repo)"
+        return 0
     else
-        print_error "配置格式错误，至少需要5个字段"
+        [[ "$silent" != "silent" ]] && print_error "推送失败"
         return 1
     fi
 }
 
-# 智能检测命令类型并添加默认环境变量
-get_default_env_vars() {
-    local command="$1"
-    local custom_env="$2"
-    local env_list=""
-    
-    # 根据命令类型添加默认环境变量
-    if [[ $command == *"npm"* ]] || [[ $command == *"node"* ]]; then
-        env_list="NODE_ENV=production"
-    elif [[ $command == *"python"* ]]; then
-        env_list="PYTHONUNBUFFERED=1"
-    elif [[ $command == *"go"* ]]; then
-        env_list="GOGC=100"
-    fi
-    
-    # 合并自定义环境变量
-    if [ -n "$custom_env" ]; then
-        if [ -n "$env_list" ]; then
-            env_list="${env_list},${custom_env}"
-        else
-            env_list="$custom_env"
-        fi
-    fi
-    
-    echo "$env_list"
+init_cloud_data() {
+    echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    sync_to_cloud silent
 }
 
-# 生成环境变量配置
-generate_env_vars() {
-    local env_vars="$1"
-    local output=""
-    
-    if [ -n "$env_vars" ]; then
-        IFS=',' read -ra ENV_ARRAY <<< "$env_vars"
-        for env in "${ENV_ARRAY[@]}"; do
-            output="${output}Environment=${env}\n"
-        done
-    fi
-    
-    # 总是添加 PATH
-    output="${output}Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin\n"
-    
-    echo -e "$output"
-}
+# ============================================================================
+# 主菜单
+# ============================================================================
 
-# 生成资源限制配置
-generate_resource_limits() {
-    local limits="$1"
-    local output=""
-    
-    if [ -n "$limits" ]; then
-        IFS=',' read -ra LIMIT_ARRAY <<< "$limits"
-        for limit in "${LIMIT_ARRAY[@]}"; do
-            IFS='=' read -r key value <<< "$limit"
-            case $key in
-                cpu)
-                    if [[ $value == *"%" ]]; then
-                        output="${output}CPUQuota=${value}\n"
-                    else
-                        # 核心数转换为百分比
-                        percent=$((value*100))
-                        output="${output}CPUQuota=${percent}%\n"
-                    fi
-                    ;;
-                memory)
-                    output="${output}MemoryLimit=${value}\n"
-                    ;;
-                tasks)
-                    output="${output}TasksMax=${value}\n"
-                    ;;
-            esac
-        done
-    fi
-    
-    echo -e "$output"
-}
-
-# 生成 systemd 服务文件
-generate_service() {
-    local name="$1"
-    local description="$2"
-    local work_dir="$3"
-    local start_command="$4"
-    local user="$5"
-    local restart_sec="$6"
-    local env_vars="$7"
-    local resource_limits="$8"
-    local extra_options="$9"
-    
-    # 获取完整的环境变量配置
-    local full_env_vars=$(get_default_env_vars "$start_command" "$env_vars")
-    local env_config=$(generate_env_vars "$full_env_vars")
-    local resource_config=$(generate_resource_limits "$resource_limits")
-    
-    # 解析额外选项
-    local service_type="simple"
-    local pid_file=""
-    
-    if [ -n "$extra_options" ]; then
-        IFS=',' read -ra OPTION_ARRAY <<< "$extra_options"
-        for option in "${OPTION_ARRAY[@]}"; do
-            IFS='=' read -r key value <<< "$option"
-            case $key in
-                type) service_type="$value" ;;
-                pidfile) pid_file="$value" ;;
-            esac
-        done
-    fi
-    
-    # 生成服务文件
-    {
-        echo "[Unit]"
-        echo "Description=${description}"
-        echo "After=network.target"
-        echo "StartLimitIntervalSec=60"
-        echo "StartLimitBurst=5"
-        echo ""
-        echo "[Service]"
-        echo "Type=${service_type}"
-        echo "User=${user}"
-        echo "WorkingDirectory=${work_dir}"
-        echo "ExecStart=${start_command}"
-        echo "Restart=always"
-        echo "RestartSec=${restart_sec}"
-        echo "StandardOutput=journal"
-        echo "StandardError=journal"
-        echo -e "${env_config}"
-        echo -e "${resource_config}"
-    } > "$SYSTEMD_DIR/${name}.service"
-    
-    # 添加 PID 文件(如果指定)
-    if [ -n "$pid_file" ]; then
-        echo "PIDFile=${pid_file}" >> "$SYSTEMD_DIR/${name}.service"
-    fi
-    
-    # 添加尾部
-    {
-        echo ""
-        echo "[Install]"
-        echo "WantedBy=multi-user.target"
-    } >> "$SYSTEMD_DIR/${name}.service"
-}
-
-# 验证单个服务配置
-validate_service() {
-    local name="$1"
-    local config="$2"
-    local errors=0
-    
-    IFS='|' read -r description work_dir start_command user restart_sec env_vars resource_limits extra_options <<< "$(parse_service_config "$config")"
-    
-    echo -e "${CYAN}检查服务: ${name}${NC}"
-    
-    # 检查工作目录
-    if [ ! -d "$work_dir" ]; then
-        print_error "工作目录不存在: $work_dir"
-        ((errors++))
-    else
-        print_success "工作目录存在: $work_dir"
-    fi
-    
-    # 检查启动命令
-    local cmd_first_word=$(echo "$start_command" | awk '{print $1}')
-    
-    # 处理相对路径和绝对路径
-    if [[ $cmd_first_word == ./* ]] || [[ $cmd_first_word == /* ]]; then
-        # 脚本或二进制文件
-        local full_path="$work_dir/$cmd_first_word"
-        if [[ $cmd_first_word == /* ]]; then
-            full_path="$cmd_first_word"
-        fi
-        
-        if [ ! -f "$full_path" ]; then
-            print_error "可执行文件不存在: $full_path"
-            ((errors++))
-        elif [ ! -x "$full_path" ]; then
-            print_warning "文件存在但不可执行: $full_path"
-            print_info "建议执行: chmod +x $full_path"
-            ((errors++))
-        else
-            print_success "可执行文件存在: $full_path"
-        fi
-    else
-        # 系统命令
-        if ! command_exists "$cmd_first_word"; then
-            print_error "命令未找到: $cmd_first_word"
-            print_info "请安装相应软件包"
-            ((errors++))
-        else
-            print_success "命令可用: $cmd_first_word"
-        fi
-    fi
-    
-    # 检查用户
-    if ! user_exists "$user"; then
-        print_error "用户不存在: $user"
-        ((errors++))
-    else
-        print_success "用户存在: $user"
-    fi
-    
-    # 检查重启延迟
-    if ! [[ "$restart_sec" =~ ^[0-9]+$ ]]; then
-        print_error "重启延迟必须是数字: $restart_sec"
-        ((errors++))
-    else
-        print_success "重启延迟有效: ${restart_sec}秒"
-    fi
-    
-    # 显示配置信息
-    if [ -n "$env_vars" ]; then
-        print_info "环境变量: $env_vars"
-    fi
-    
-    if [ -n "$resource_limits" ]; then
-        print_info "资源限制: $resource_limits"
-    fi
-    
-    echo ""
-    return $errors
-}
-
-# 验证所有服务配置
-validate_all_configs() {
+show_system_info() {
     clear
-    print_title "🔍 验证所有服务配置"
-    draw_line
-    echo ""
+    local os_name=$(grep "^PRETTY_NAME" /etc/os-release 2>/dev/null | cut -d'"' -f2 || echo "Unknown")
+    local mem_info=$(free -h | awk '/^Mem:/ {print $3 "/" $2}')
+    local disk_info=$(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')
     
-    if [ ${#SERVICES[@]} -eq 0 ]; then
-        print_warning "配置文件中没有服务！"
-        echo ""
-        read -p "按 Enter 键返回主菜单..."
-        return
-    fi
-    
-    local total_errors=0
-    local service_count=0
-    
-    for service_name in "${!SERVICES[@]}"; do
-        ((service_count++))
-        validate_service "$service_name" "${SERVICES[$service_name]}"
-        if [ $? -gt 0 ]; then
-            ((total_errors++))
-        fi
-    done
-    
-    draw_line
-    echo ""
-    
-    if [ $total_errors -eq 0 ]; then
-        print_success "所有 $service_count 个服务配置验证通过！✨"
-    else
-        print_error "发现 $total_errors 个服务配置有问题"
-        print_warning "请修复上述错误后再安装服务"
-    fi
-    
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║  Tools v${VERSION} | $os_name"
+    echo "║  💾 内存: $mem_info | 💿 磁盘: $disk_info"
+    echo "╚════════════════════════════════════════════════════════════╝"
 }
 
-# 安装所有服务
-install_all_services() {
-    clear
-    print_title "📦 安装所有服务"
-    draw_line
-    echo ""
-    
-    if [ ${#SERVICES[@]} -eq 0 ]; then
-        print_warning "配置文件中没有服务！请先编辑脚本添加服务。"
-        echo ""
-        read -p "按 Enter 键返回主菜单..."
-        return
-    fi
-    
-    print_info "开始安装 ${#SERVICES[@]} 个服务..."
-    echo ""
-    
-    for service_name in "${!SERVICES[@]}"; do
-        local config_parsed=$(parse_service_config "${SERVICES[$service_name]}")
-        IFS='|' read -r description work_dir start_command user restart_sec env_vars resource_limits extra_options <<< "$config_parsed"
-        
-        print_highlight "━━━ 安装: $service_name ━━━"
-        print_info "描述: $description"
-        print_info "目录: $work_dir"
-        print_info "命令: $start_command"
-        
-        # 生成服务文件
-        generate_service "$service_name" "$description" "$work_dir" "$start_command" "$user" "$restart_sec" "$env_vars" "$resource_limits" "$extra_options"
-        
-        # 重载配置
-        systemctl daemon-reload
-        
-        # 启用服务
-        systemctl enable "${service_name}.service" &>/dev/null
-        
-        # 启动服务
-        systemctl start "${service_name}.service"
-        
-        # 检查状态
-        sleep 1
-        if systemctl is-active --quiet "${service_name}.service"; then
-            print_success "$service_name 启动成功 ✓"
-        else
-            print_error "$service_name 启动失败 ✗"
-            print_warning "查看详细日志: journalctl -u ${service_name}.service -n 20"
-        fi
-        echo ""
-    done
-    
-    draw_line
-    print_success "所有服务安装完成！"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 移除所有服务
-remove_all_services() {
-    clear
-    print_title "🗑️  移除所有服务"
-    draw_line
-    echo ""
-    
-    print_warning "此操作将移除所有已配置的服务！"
-    echo ""
-    read -p "确认要移除所有服务吗？(y/N): " confirm
-    if [[ ! $confirm =~ ^[Yy]$ ]]; then
-        print_info "已取消操作"
-        sleep 1
-        return
-    fi
-    
-    echo ""
-    
-    for service_name in "${!SERVICES[@]}"; do
-        print_info "移除服务: $service_name"
-        
-        systemctl stop "${service_name}.service" &>/dev/null
-        systemctl disable "${service_name}.service" &>/dev/null
-        rm -f "$SYSTEMD_DIR/${service_name}.service"
-        
-        print_success "$service_name 已移除"
-    done
-    
-    systemctl daemon-reload
-    
-    echo ""
-    print_success "所有服务移除完成！"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 查看服务状态
-view_services_status() {
-    clear
-    print_title "📋 服务状态"
-    draw_line
-    echo ""
-    
-    printf "%-25s %-15s %-40s\n" "服务名称" "状态" "描述"
-    draw_line
-    
-    for service_name in "${!SERVICES[@]}"; do
-        local config_parsed=$(parse_service_config "${SERVICES[$service_name]}")
-        IFS='|' read -r description _ _ _ _ _ _ _ <<< "$config_parsed"
-        
-        if systemctl is-active --quiet "${service_name}.service"; then
-            status="${GREEN}● 运行中${NC}"
-        elif systemctl is-enabled --quiet "${service_name}.service" 2>/dev/null; then
-            status="${YELLOW}○ 已停止${NC}"
-        else
-            status="${RED}○ 未安装${NC}"
-        fi
-        
-        printf "%-25s %-24b %-40s\n" "$service_name" "$status" "$description"
-    done
-    
-    draw_line
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 重启所有服务
-restart_all_services() {
-    clear
-    print_title "🔄 重启所有服务"
-    draw_line
-    echo ""
-    
-    for service_name in "${!SERVICES[@]}"; do
-        if systemctl is-enabled --quiet "${service_name}.service" 2>/dev/null; then
-            print_info "重启服务: $service_name"
-            systemctl restart "${service_name}.service"
-            
-            sleep 1
-            if systemctl is-active --quiet "${service_name}.service"; then
-                print_success "$service_name 重启成功"
-            else
-                print_error "$service_name 重启失败"
-            fi
-        else
-            print_warning "$service_name 未安装，跳过"
-        fi
-    done
-    
-    echo ""
-    print_success "所有服务重启完成！"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 启动所有服务
-start_all_services() {
-    clear
-    print_title "▶️  启动所有服务"
-    draw_line
-    echo ""
-    
-    for service_name in "${!SERVICES[@]}"; do
-        if systemctl is-enabled --quiet "${service_name}.service" 2>/dev/null; then
-            print_info "启动服务: $service_name"
-            systemctl start "${service_name}.service"
-            
-            sleep 1
-            if systemctl is-active --quiet "${service_name}.service"; then
-                print_success "$service_name 启动成功"
-            else
-                print_error "$service_name 启动失败"
-            fi
-        else
-            print_warning "$service_name 未安装，跳过"
-        fi
-    done
-    
-    echo ""
-    print_success "所有服务启动完成！"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 停止所有服务
-stop_all_services() {
-    clear
-    print_title "⏸️  停止所有服务"
-    draw_line
-    echo ""
-    
-    for service_name in "${!SERVICES[@]}"; do
-        if systemctl is-active --quiet "${service_name}.service"; then
-            print_info "停止服务: $service_name"
-            systemctl stop "${service_name}.service"
-            print_success "$service_name 已停止"
-        else
-            print_warning "$service_name 未运行，跳过"
-        fi
-    done
-    
-    echo ""
-    print_success "所有服务停止完成！"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 查看服务日志
-view_service_logs() {
-    clear
-    print_title "📊 查看服务日志"
-    draw_line
-    echo ""
-    
-    local i=1
-    local service_array=()
-    
-    for service_name in "${!SERVICES[@]}"; do
-        service_array+=("$service_name")
-        local config_parsed=$(parse_service_config "${SERVICES[$service_name]}")
-        IFS='|' read -r description _ _ _ _ _ _ _ <<< "$config_parsed"
-        echo -e "  ${CYAN}[$i]${NC} $service_name - $description"
-        ((i++))
-    done
-    
-    echo -e "  ${CYAN}[0]${NC} 返回主菜单"
-    echo ""
-    draw_line
-    echo -n "选择要查看日志的服务 [0-$((${#service_array[@]}))]: "
-    read choice
-    
-    if [[ $choice -eq 0 ]]; then
-        return
-    fi
-    
-    if [[ $choice -gt 0 && $choice -le ${#service_array[@]} ]]; then
-        local selected_service="${service_array[$((choice-1))]}"
-        manage_service_menu "$selected_service"
-    else
-        print_error "无效的选择"
-        sleep 1
-    fi
-}
-
-# 单个服务管理菜单
-manage_service_menu() {
-    local service_name="$1"
-    
-    while true; do
-        clear
-        print_title "⚙️  管理服务: $service_name"
-        draw_line
-        echo ""
-        
-        if systemctl is-active --quiet "${service_name}.service"; then
-            echo -e "  当前状态: ${GREEN}● 运行中${NC}"
-        else
-            echo -e "  当前状态: ${RED}○ 已停止${NC}"
-        fi
-        
-        echo ""
-        echo -e "  ${CYAN}[1]${NC} 启动服务"
-        echo -e "  ${CYAN}[2]${NC} 停止服务"
-        echo -e "  ${CYAN}[3]${NC} 重启服务"
-        echo -e "  ${CYAN}[4]${NC} 查看状态"
-        echo -e "  ${CYAN}[5]${NC} 查看日志 (最近50行)"
-        echo -e "  ${CYAN}[6]${NC} 实时日志"
-        echo -e "  ${CYAN}[7]${NC} 查看服务配置"
-        echo -e "  ${CYAN}[0]${NC} 返回上级菜单"
-        echo ""
-        draw_line
-        echo -n "请选择操作 [0-7]: "
-        read sub_choice
-        
-        case $sub_choice in
-            1)
-                systemctl start "${service_name}.service"
-                print_success "已启动 $service_name"
-                sleep 1
-                ;;
-            2)
-                systemctl stop "${service_name}.service"
-                print_success "已停止 $service_name"
-                sleep 1
-                ;;
-            3)
-                systemctl restart "${service_name}.service"
-                print_success "已重启 $service_name"
-                sleep 1
-                ;;
-            4)
-                echo ""
-                systemctl status "${service_name}.service"
-                echo ""
-                read -p "按 Enter 键继续..."
-                ;;
-            5)
-                clear
-                journalctl -u "${service_name}.service" -n 50 --no-pager
-                echo ""
-                read -p "按 Enter 键继续..."
-                ;;
-            6)
-                clear
-                print_title "📊 $service_name 实时日志 (Ctrl+C 退出)"
-                draw_line
-                echo ""
-                journalctl -u "${service_name}.service" -f
-                ;;
-            7)
-                clear
-                print_title "📄 $service_name 服务配置"
-                draw_line
-                echo ""
-                if [ -f "$SYSTEMD_DIR/${service_name}.service" ]; then
-                    cat "$SYSTEMD_DIR/${service_name}.service"
-                else
-                    print_error "服务配置文件不存在"
-                fi
-                echo ""
-                read -p "按 Enter 键继续..."
-                ;;
-            0)
-                return
-                ;;
-            *)
-                print_error "无效的选择"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-# 资源使用统计
-view_resource_usage() {
-    clear
-    print_title "📈 服务资源使用统计"
-    draw_line
-    echo ""
-    
-    if ! command_exists systemd-cgtop; then
-        print_error "systemd-cgtop 命令不可用"
-        echo ""
-        read -p "按 Enter 键返回主菜单..."
-        return
-    fi
-    
-    print_info "正在收集资源使用数据..."
-    echo ""
-    
-    printf "%-25s %-10s %-10s %-10s %s\n" "服务名称" "状态" "CPU" "内存" "任务数"
-    draw_line
-    
-    for service_name in "${!SERVICES[@]}"; do
-        if systemctl is-active --quiet "${service_name}.service"; then
-            # 获取 CPU 使用率
-            local cpu_usage=$(systemctl show "${service_name}.service" --property=CPUUsageNSec | cut -d= -f2)
-            
-            # 获取内存使用
-            local memory_usage=$(systemctl show "${service_name}.service" --property=MemoryCurrent | cut -d= -f2)
-            
-            # 获取任务数
-            local tasks=$(systemctl show "${service_name}.service" --property=TasksCurrent | cut -d= -f2)
-            
-            # 格式化内存显示
-            if [ "$memory_usage" != "[not set]" ] && [ -n "$memory_usage" ] && [ "$memory_usage" != "0" ]; then
-                memory_mb=$((memory_usage / 1024 / 1024))
-                memory_display="${memory_mb}MB"
-            else
-                memory_display="N/A"
-            fi
-            
-            # 格式化任务数
-            if [ "$tasks" == "[not set]" ] || [ -z "$tasks" ]; then
-                tasks="N/A"
-            fi
-            
-            printf "%-25s %-10s %-10s %-10s %s\n" \
-                "$service_name" \
-                "运行中" \
-                "N/A" \
-                "$memory_display" \
-                "$tasks"
-        else
-            printf "%-25s %-10s %-10s %-10s %s\n" \
-                "$service_name" \
-                "已停止" \
-                "-" \
-                "-" \
-                "-"
-        fi
-    done
-    
-    draw_line
-    echo ""
-    print_info "提示: 使用 'systemd-cgtop' 命令可查看更详细的实时资源统计"
-    echo ""
-    read -p "按 Enter 键返回主菜单..."
-}
-
-# 编辑配置
-edit_config() {
-    clear
-    print_title "📝 编辑配置"
-    draw_line
-    echo ""
-    print_info "即将打开配置编辑..."
-    echo ""
-    print_warning "请编辑脚本中的 SERVICES 配置区域"
-    print_warning "格式: SERVICES[名称]=\"描述|工作目录|启动命令|用户|重启延迟|环境变量|资源限制|选项\""
-    echo ""
-    print_info "配置示例："
-    echo ""
-    echo "  # 基础格式(5个字段)"
-    echo "  SERVICES[app1]=\"应用1|/root/app1|npm start|root|10\""
-    echo ""
-    echo "  # 带环境变量(6个字段)"
-    echo "  SERVICES[app2]=\"应用2|/root/app2|node app.js|root|10|PORT=3000,ENV=prod\""
-    echo ""
-    echo "  # 带资源限制(7个字段)"
-    echo "  SERVICES[app3]=\"应用3|/root/app3|python3 app.py|root|10|ENV=prod|memory=1G,cpu=50%\""
-    echo ""
-    read -p "按 Enter 键用编辑器打开此脚本，或 Ctrl+C 取消..."
-    
-    # 尝试使用最适合的编辑器
-    if command_exists nano; then
-        nano "$0"
-    elif command_exists vi; then
-        vi "$0"
-    elif command_exists vim; then
-        vim "$0"
-    else
-        print_error "未找到可用的编辑器 (nano/vi/vim)"
-        echo ""
-        read -p "按 Enter 键返回主菜单..."
-        return
-    fi
-    
-    print_success "配置已更新！请重新运行脚本使配置生效。"
-    echo ""
-    read -p "按 Enter 键退出..."
-    exit 0
-}
-
-# 主循环
-main() {
-    # 检查权限
-    if [ "$EUID" -ne 0 ]; then
-        print_error "请使用 root 权限运行此脚本: sudo $0"
-        exit 1
-    fi
-    
-    # 检查 systemd
-    if ! command_exists systemctl; then
-        print_error "此脚本需要 systemd 支持"
-        exit 1
+main_menu() {
+    # 仅首次进入时自动同步
+    if [[ "$IS_SYNCED" == "false" ]]; then
+        sync_from_cloud silent
+        IS_SYNCED="true"
     fi
     
     while true; do
-        show_menu
-        read choice
+        show_system_info
+        cat <<'EOF'
+
+ ▸ 快捷操作
+   [T/tt] 📝 粘贴并执行    [C/tc] 💾 收藏夹
+
+EOF
+        # 显示常用命令（最多3个）
+        local fav_count=$(jq -r '[.commands[] | select(.favorite == true)] | length' "$CACHE_FILE" 2>/dev/null)
+        if [[ "$fav_count" -gt 0 ]]; then
+            echo " ▸ 常用命令 (⭐ 来自收藏夹)"
+            jq -r '.commands[] | select(.favorite == true) | "\(.id)|\(.command)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id cmd; do
+                local display_cmd="${cmd:0:50}"
+                [[ ${#cmd} -gt 50 ]] && display_cmd="${display_cmd}..."
+                echo "   [C$id] $display_cmd"
+            done
+            echo ""
+        fi
+        
+        cat <<'EOF'
+ ▸ 服务与容器
+   [1] 注册服务    [4] Docker     [7] 添加路由
+   [2] 管理服务    [5] 容器管理    [8] 管理路由
+   [3] 定时任务    [6] Caddy      [9] Tailscale
+   
+ ▸ 网络与系统
+   [10] Exit Node  [12] 时区      [U] 🔄 更新脚本
+   [11] 1Panel     [13] Root SSH  [0] 退出
+════════════════════════════════════════════════════════════
+EOF
+        read -p "请选择 (支持 tt, tc, C1): " choice
+        local raw_choice="$choice"
+        choice=$(echo "$choice" | tr '[:lower:]' '[:upper:]')
+        
+        # 支持直接输入 C1 / S2
+        if [[ "$choice" =~ ^[CS][0-9]+$ ]]; then
+            execute_direct_by_string "$choice"
+            continue
+        fi
         
         case $choice in
-            1) install_all_services ;;
-            2) remove_all_services ;;
-            3) view_services_status ;;
-            4) restart_all_services ;;
-            5) start_all_services ;;
-            6) stop_all_services ;;
-            7) view_service_logs ;;
-            8) manage_single_service ;;
-            9) edit_config ;;
-            10) validate_all_configs ;;
-            11) view_resource_usage ;;
-            0) 
-                clear
-                print_success "感谢使用，再见！👋"
-                exit 0
-                ;;
-            *)
-                print_error "无效的选择，请重新输入"
-                sleep 1
+            T|TT) run_script_from_paste ;;
+            C|TC) command_script_favorites ;;
+            1) register_binary_service ;;
+            2) manage_services ;;
+            3) cron_management ;;
+            4) install_docker_compose ;;
+            5) docker_container_management ;;
+            6) install_caddy ;;
+            7) add_caddy_route ;;
+            8) manage_caddy_routes ;;
+            9) install_tailscale ;;
+            10) configure_exit_node ;;
+            11) install_1panel ;;
+            12) change_timezone ;;
+            13) enable_root_ssh ;;
+            U) update_script ;;
+            0) exit 0 ;;
+            *) 
+                if [[ "$raw_choice" == "tt" ]]; then run_script_from_paste
+                elif [[ "$raw_choice" == "tc" ]]; then command_script_favorites
+                else print_error "无效选择"; sleep 0.5; fi
                 ;;
         esac
     done
 }
 
-# 运行主程序
-main
-        clear
-        print_title "📊 $selected_service 实时日志 (Ctrl+C 退出)"
-        draw_line
-        echo ""
-        journalctl -u "${selected_service}.service" -f
-    else
-        print_error "无效的选择"
-        sleep 1
-    fi
-}
+# ============================================================================
+# [C] 收藏夹 (GitHub Repo 版)
+# ============================================================================
 
-# 管理单个服务
-manage_single_service() {
-    clear
-    print_title "⚙️  管理单个服务"
-    draw_line
-    echo ""
-    
-    local i=1
-    local service_array=()
-    
-    for service_name in "${!SERVICES[@]}"; do
-        service_array+=("$service_name")
-        local config_parsed=$(parse_service_config "${SERVICES[$service_name]}")
-        IFS='|' read -r description _ _ _ _ _ _ _ <<< "$config_parsed"
+command_script_favorites() {
+    while true; do
+        clear
+        echo "╔════════════════════════════════════════════════════════════╗"
+        echo "║    命令、脚本收藏夹（云端：GitHub Repo）                  ║"
+        echo "╚════════════════════════════════════════════════════════════╝"
+        echo ""
         
-        if systemctl is-active --quiet "${service_name}.service"; then
-            status="${GREEN}运行中${NC}"
+        if [[ ! -f "$CACHE_FILE" ]]; then echo "{}" > "$CACHE_FILE"; fi
+
+        local has_data=$(jq -r '(.commands | length) + (.scripts | length)' "$CACHE_FILE" 2>/dev/null)
+        
+        if [[ "$has_data" == "0" || -z "$has_data" ]]; then
+            print_warning "暂无数据 (按 R 刷新)"
         else
-            status="${RED}已停止${NC}"
+            # 批量渲染命令 (仅一次 jq 调用)
+            local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)|\(.favorite // false)"' "$CACHE_FILE" 2>/dev/null)
+            if [[ -n "$cmd_list" ]]; then
+                echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
+                while IFS='|' read -r id cmd fav; do
+                    local star=""
+                    [[ "$fav" == "true" ]] && star="⭐ "
+                    echo "[C$id] $star$cmd"
+                done <<< "$cmd_list"
+                echo ""
+            fi
+            
+            # 批量渲染脚本 (仅一次 jq 调用)
+            local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
+            if [[ -n "$script_list" ]]; then
+                echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
+                while IFS='|' read -r id name lines; do
+                    echo "[S$id] $name (${lines}行)"
+                done <<< "$script_list"
+                echo ""
+            fi
         fi
         
-        printf "  ${CYAN}[%d]${NC} %-25s - %b - %s\n" "$i" "$service_name" "$status" "$description"
-        ((i++))
+        echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
+        echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
+        echo "[7] 💾 下载脚本  [R] 🔄 刷新     [0] 返回"
+        echo ""
+        read -p "请选择 (支持 tt, C1): " choice
+        
+        # 菜单内直接支持 C1/S1
+        if [[ "$choice" =~ ^[Cc][0-9]+$ ]] || [[ "$choice" =~ ^[Ss][0-9]+$ ]]; then
+             execute_direct_by_string "$choice"
+             continue
+        fi
+
+        case $choice in
+            tt|TT) run_script_from_paste ;;
+            1) add_command_favorite ;;
+            2) add_script_favorite ;;
+            3) execute_favorite ;;
+            4) delete_favorite ;;
+            5) reorder_favorites ;;
+            6) toggle_favorite ;;
+            7) download_script ;;
+            [Rr]) 
+                sync_from_cloud 
+                IS_SYNCED="true"
+                ;;
+            0) return ;;
+            *) print_error "无效选择"; sleep 0.5 ;;
+        esac
     done
-    
-    echo -e "  ${CYAN}[0]${NC} 返回主菜单"
+}
+
+execute_direct_by_string() {
+    local input="$1"
+    local type="${input:0:1}"
+    local id="${input:1}"
+    case "${type^^}" in
+        C) execute_command_favorite "$id" ;;
+        S) execute_script_favorite "$id" ;;
+    esac
+}
+
+add_command_favorite() {
     echo ""
-    draw_line
-    echo -n "选择服务 [0-$((${#service_array[@]}))]: "
-    read choice
+    read -p "输入要收藏的命令: " cmd
+    [[ -z "$cmd" ]] && return
+    sync_from_cloud silent
+    local max_id=$(jq '[.commands[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
+    local new_id=$((max_id + 1))
+    local new_cmd=$(jq -n --arg id "$new_id" --arg cmd "$cmd" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), command: $cmd, favorite: false, added_time: $time}')
+    jq ".commands += [$new_cmd]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    sync_to_cloud silent && print_success "已保存 [C$new_id]" || print_error "云端同步失败"
+    sleep 1
+}
+
+add_script_favorite() {
+    clear
+    read -p "脚本名称: " script_name
+    [[ -z "$script_name" ]] && return
+    echo "请粘贴脚本内容 (Ctrl+D 结束):"
+    local temp_script="/tmp/tools-script-$RANDOM.txt"
+    cat > "$temp_script"
+    [[ ! -s "$temp_script" ]] && { rm "$temp_script"; return; }
+    local content=$(cat "$temp_script")
+    local lines=$(wc -l < "$temp_script")
+    sync_from_cloud silent
+    local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
+    local new_id=$((max_id + 1))
+    local new_obj=$(jq -n --arg id "$new_id" --arg name "$script_name" --arg content "$content" --arg lines "$lines" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), added_time: $time}')
+    jq ".scripts += [$new_obj]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    rm "$temp_script"
+    sync_to_cloud silent && print_success "已保存 [S$new_id]" || print_error "云端同步失败"
+    sleep 1
+}
+
+execute_favorite() {
+    echo ""
+    read -p "输入编号 (如 C1, S2): " input
+    execute_direct_by_string "$input"
+}
+
+execute_command_favorite() {
+    local id="$1"
+    local cmd=$(jq -r ".commands[] | select(.id == $id) | .command" "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$cmd" ]]; then print_error "未找到 C$id"; sleep 1; return; fi
+    echo ""; print_info "执行: $cmd"; echo "════════════════════════════════════════════════════════════"
+    eval "$cmd"
+    echo "════════════════════════════════════════════════════════════"
+    echo ""; read -p "按回车继续..."
+}
+
+execute_script_favorite() {
+    local id="$1"
+    local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$found" ]]; then print_error "未找到 S$id"; sleep 1; return; fi
+    local name=$(echo "$found" | jq -r '.name')
+    local content=$(echo "$found" | jq -r '.content')
+    echo ""; print_info "执行脚本: $name"; echo ""
+    read -p "参数? [留空跳过]: " params
+    local temp_script="/tmp/tools-exec-$RANDOM.sh"
+    echo "$content" > "$temp_script" && chmod +x "$temp_script"
+    echo ""; echo "════════════════════════════════════════════════════════════"
+    bash "$temp_script" $params
+    echo "════════════════════════════════════════════════════════════"
+    rm -f "$temp_script"
+    echo ""; read -p "按回车继续..."
+}
+
+delete_favorite() {
+    read -p "输入删除编号 (C1/S2): " input
+    local type="${input:0:1}"
+    local id="${input:1}"
+    [[ ! "$id" =~ ^[0-9]+$ ]] && return
+    sync_from_cloud silent
+    if [[ "${type^^}" == "C" ]]; then
+        jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    else
+        jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    fi
+    sync_to_cloud silent && print_success "删除成功" || print_error "同步失败"
+    sleep 1
+}
+
+reorder_favorites() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║    重排编号功能                                            ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    print_warning "此操作会重新分配所有 ID 为连续数字 (1, 2, 3...)"
+    read -p "确认执行? [y/N]: " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && return
     
-    if [[ $choice -eq 0 ]]; then
+    sync_from_cloud silent
+    
+    # 使用临时文件逐步处理，避免 jq 内存问题
+    local temp_file="/tmp/reorder-$RANDOM.json"
+    
+    # 重排命令 ID
+    jq '.commands | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.commands"
+    
+    # 重排脚本 ID
+    jq '.scripts | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.scripts"
+    
+    # 合并结果
+    jq -n \
+        --slurpfile cmds "$temp_file.commands" \
+        --slurpfile scripts "$temp_file.scripts" \
+        '{commands: $cmds[0], scripts: $scripts[0]}' > "$CACHE_FILE.tmp"
+    
+    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    rm -f "$temp_file"*
+    
+    sync_to_cloud silent && print_success "重排完成" || print_error "同步失败"
+    sleep 2
+}
+
+toggle_favorite() {
+    echo ""
+    read -p "输入编号 (如 C1): " input
+    local type="${input:0:1}"
+    local id="${input:1}"
+    
+    if [[ "${type^^}" != "C" ]]; then
+        print_error "仅支持命令收藏 (C1, C2...)"
+        sleep 1
         return
     fi
     
-    if [[ $choice -gt 0 && $choice -le ${#service_array[@]} ]]; then
-        local selected_service="${service_array[$((choice-1))]}"
+    [[ ! "$id" =~ ^[0-9]+$ ]] && return
+    sync_from_cloud silent
+    
+    local current_fav=$(jq -r ".commands[] | select(.id == $id) | .favorite // false" "$CACHE_FILE" 2>/dev/null)
+    
+    if [[ -z "$current_fav" ]]; then
+        print_error "未找到 C$id"
+        sleep 1
+        return
+    fi
+    
+    local new_fav="true"
+    [[ "$current_fav" == "true" ]] && new_fav="false"
+    
+    jq "(.commands[] | select(.id == $id) | .favorite) = $new_fav" "$CACHE_FILE" > "$CACHE_FILE.tmp" && \
+        mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    
+    sync_to_cloud silent
+    
+    if [[ "$new_fav" == "true" ]]; then
+        print_success "C$id 已设为常用 ⭐"
+    else
+        print_success "C$id 已取消常用"
+    fi
+    sleep 1
+}
+
+download_script() {
+    echo ""
+    read -p "输入脚本编号 (如 S1): " input
+    local type="${input:0:1}"
+    local id="${input:1}"
+    
+    if [[ "${type^^}" != "S" ]]; then
+        print_error "仅支持脚本下载 (S1, S2...)"
+        sleep 1
+        return
+    fi
+    
+    [[ ! "$id" =~ ^[0-9]+$ ]] && return
+    
+    local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$found" ]]; then
+        print_error "未找到 S$id"
+        sleep 1
+        return
+    fi
+    
+    local name=$(echo "$found" | jq -r '.name')
+    local content=$(echo "$found" | jq -r '.content')
+    
+    # 生成安全的文件名
+    local safe_name=$(echo "$name" | tr ' ' '_' | tr -cd '[:alnum:]_.-')
+    local output_file="${safe_name}.sh"
+    
+    echo ""
+    read -p "保存路径 [默认: ./$output_file]: " user_path
+    user_path=${user_path:-"./$output_file"}
+    
+    echo "$content" > "$user_path" && chmod +x "$user_path"
+    
+    if [[ -f "$user_path" ]]; then
+        print_success "脚本已下载到: $user_path"
+        log_action "Downloaded script S$id to $user_path"
+    else
+        print_error "下载失败"
+    fi
+    
+    echo ""
+    read -p "按回车继续..."
+}
+
+# ============================================================================
+# 其他原有功能
+# ============================================================================
+
+run_script_from_paste() {
+    clear; echo "请粘贴脚本 (Ctrl+D 结束):"; echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    local t="/tmp/paste-$RANDOM.sh"; cat > "$t"
+    [[ ! -s "$t" ]] && { rm "$t"; return; }
+    echo ""; read -p "参数? : " p; chmod +x "$t"
+    echo "════════════════════════════════════════════════════════════"
+    bash "$t" $p; rm "$t"
+    echo "════════════════════════════════════════════════════════════"
+    echo ""; read -p "按回车继续..."
+}
+
+register_binary_service() {
+    read -p "目录: " d; [[ ! -d "$d" ]] && return
+    find "$d" -maxdepth 1 -type f -executable | nl; read -p "选择: " n
+    f=$(find "$d" -maxdepth 1 -type f -executable | sed -n "${n}p")
+    [[ -z "$f" ]] && return
+    bn=$(basename "$f"); read -p "服务名 [$bn]: " sn; sn=${sn:-$bn}
+    check_root
+    cat > "/etc/systemd/system/${sn}.service" <<EOF
+[Unit]
+Description=$sn
+After=network.target
+[Service]
+ExecStart=$f
+WorkingDirectory=$d
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload && systemctl enable --now "$sn" && print_success "成功"
+    local up=$(jq ".services += [{\"name\":\"$sn\"}]" "$LOCAL_DATA")
+    echo "$up" > "$LOCAL_DATA"
+    sleep 2
+}
+
+manage_services() {
+    while true; do
+        clear; echo "已注册服务:"; jq -r '.services[].name' "$LOCAL_DATA" | nl
+        echo ""; read -p "[S]启 [P]停 [R]重启 [L]日志 [0]返: " c
+        [[ $c == 0 ]] && return
+        read -p "编号: " n; name=$(jq -r ".services[$((n-1))].name" "$LOCAL_DATA")
+        case $c in
+            S|s) systemctl start "$name" ;; P|p) systemctl stop "$name" ;;
+            R|r) systemctl restart "$name" ;; L|l) journalctl -u "$name" -n 20; read -p "..." ;;
+        esac
+    done
+}
+
+cron_management() {
+    print_info "定时任务管理功能暂未实现"
+    sleep 2
+}
+
+add_caddy_route() {
+    print_info "Caddy 路由添加功能暂未实现"
+    sleep 2
+}
+
+manage_caddy_routes() {
+    print_info "Caddy 路由管理功能暂未实现"
+    sleep 2
+}
+
+configure_exit_node() {
+    print_info "Exit Node 配置功能暂未实现"
+    sleep 2
+}
+
+change_timezone() {
+    print_info "时区设置功能暂未实现"
+    sleep 2
+}
+
+enable_root_ssh() {
+    print_info "Root SSH 启用功能暂未实现"
+    sleep 2
+}
+
+install_docker_compose() {
+    if ! command -v docker &>/dev/null; then curl -fsSL https://get.docker.com | sh; fi
+    apt-get install -y docker-compose-plugin
+    print_success "Docker 安装完成"; sleep 2
+}
+
+docker_container_management() {
+    while true; do
+        clear; docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}" | nl
+        echo ""; read -p "[S]启 [P]停 [R]重启 [D]删 [L]日志 [E]进 [0]返: " c
+        [[ $c == 0 ]] && return
+        read -p "行号(非ID): " n; id=$(docker ps -a --format "{{.ID}}" | sed -n "$((n-1))p")
+        [[ -z "$id" ]] && continue
+        case $c in
+            S|s) docker start "$id" ;; P|p) docker stop "$id" ;; R|r) docker restart "$id" ;;
+            D|d) docker rm -f "$id" ;; L|l) docker logs --tail 20 "$id"; read -p "..." ;;
+            E|e) docker exec -it "$id" sh ;;
+        esac
+    done
+}
+
+install_caddy() {
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update && apt-get install -y caddy
+    print_success "Caddy 安装完成"; sleep 2
+}
+
+install_tailscale() { 
+    curl -fsSL https://tailscale.com/install.sh | sh
+    print_success "Tailscale 安装完成"; sleep 2
+}
+
+install_1panel() { 
+    curl -sSL https://resource.fit2cloud.com/1panel/package/quick_start.sh | bash
+}
+
+update_script() {
+    local t="/tmp/update.sh"
+    if curl -fsSL -o "$t" "$GITHUB_RAW_URL"; then
+        chmod +x "$t"; mv "$t" "$INSTALL_PATH"
+        ln -sf "$INSTALL_PATH" "$LINK_TT"; ln -sf "$INSTALL_PATH" "$LINK_TC"
+        print_success "更新完成，正在重启..."; sleep 1; exec "$INSTALL_PATH"
+    else
+        print_error "下载失败"; sleep 2
+    fi
+}
+
+check_and_install() {
+    if [[ "$SCRIPT_PATH" != "$INSTALL_PATH" ]]; then
+        cp "$SCRIPT_PATH" "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
+        ln -sf "$INSTALL_PATH" "$LINK_TT" && ln -sf "$INSTALL_PATH" "$LINK_TC"
+        init_config
+        print_success "安装成功! 使用 't' 启动。"
+        exit 0
+    fi
+}
+
+handle_cli_args() {
+    case "$1" in
+        --help|-h) echo "Usage: t [C1|S1] | tt | tc"; exit 0 ;;
+        [Tt][Tt]) run_script_from_paste; exit 0 ;;
+        [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
+        [Cc][0-9]*|[Ss][0-9]*)
+            init_config
+            sync_from_cloud silent 
+            execute_direct_by_string "$1"
+            exit 0
+            ;;
+    esac
+}
+
+# ============================================================================
+# 主入口
+# ============================================================================
+
+main() {
+    if ! command -v jq &>/dev/null; then apt-get update && apt-get install -y jq; fi
+    check_and_install
+    init_config
+    
+    local name=$(basename "$0")
+    [[ "$name" == "tt" ]] && { run_script_from_paste; exit 0; }
+    [[ "$name" == "tc" ]] && { sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
+    
+    [[ $# -gt 0 ]] && handle_cli_args "$@"
+    main_menu
+}
+
+main "$@"

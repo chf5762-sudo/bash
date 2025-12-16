@@ -7,10 +7,11 @@
 # 功能: Ubuntu Server 轻量运维工具箱
 # 新增: 脚本链接管理功能（L1, L2...）
 # 安装位置: /usr/local/bin/t
-#           /usr/local/bin/tt (粘贴并执行快捷方式)
-#           /usr/local/bin/tc (收藏夹快捷方式)
+#           /usr/local/bin/tt (粘贴并执行快捷方式)
+#           /usr/local/bin/tc (收藏夹快捷方式)
 # 作者: Auto Generated (Modified)
 # 日期: 2025-12-16
+# 修复: 修复 Caddy 路由添加逻辑，解决 502 Bad Gateway 问题
 ################################################################################
 
 # ============================================================================
@@ -197,7 +198,8 @@ sync_links_to_cloud() {
     local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_LINK_FILE?ref=$GH_BRANCH"
     
     # 获取当前文件的 SHA
-    local file_info=$(curl -s -H "Authorization: token $GH_TOKEN" \
+    local file_info=$(curl -s -X GET \
+        -H "Authorization: token $GH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "$api_url" 2>/dev/null)
     
@@ -259,8 +261,8 @@ show_system_info() {
     local disk_info=$(df -h / | awk 'NR==2 {print $3 "/" $2 " (" $5 ")"}')
     
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║  Tools v${VERSION} | $os_name"
-    echo "║  💾 内存: $mem_info | 💿 磁盘: $disk_info"
+    echo "║  Tools v${VERSION} | $os_name"
+    echo "║  💾 内存: $mem_info | 💿 磁盘: $disk_info"
     echo "╚════════════════════════════════════════════════════════════╝"
 }
 
@@ -276,8 +278,8 @@ main_menu() {
         show_system_info
         cat <<'EOF'
 
- ▸ 快捷操作
-   [T/tt] 📝 粘贴并执行    [C/tc] 💾 收藏夹
+ ▸ 快捷操作
+   [T/tt] 📝 粘贴并执行    [C/tc] 💾 收藏夹
 
 EOF
         # 显示常用命令（最多3个）
@@ -287,7 +289,7 @@ EOF
             jq -r '.commands[] | select(.favorite == true) | "\(.id)|\(.command)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id cmd; do
                 local display_cmd="${cmd:0:50}"
                 [[ ${#cmd} -gt 50 ]] && display_cmd="${display_cmd}..."
-                echo "   [C$id] $display_cmd"
+                echo "   [C$id] $display_cmd"
             done
             echo ""
         fi
@@ -300,7 +302,7 @@ EOF
                 local line_num=1
                 while IFS='|' read -r name url; do
                     [[ -z "$name" ]] && continue
-                    echo "   [L$line_num] $name"
+                    echo "   [L$line_num] $name"
                     line_num=$((line_num + 1))
                     [[ $line_num -gt 3 ]] && break
                 done < "$LINK_CACHE"
@@ -309,14 +311,14 @@ EOF
         fi
         
         cat <<'EOF'
- ▸ 服务与容器
-   [1] 注册服务    [4] Docker     [7] 添加路由
-   [2] 管理服务    [5] 容器管理    [8] 管理路由
-   [3] 定时任务    [6] Caddy      [9] Tailscale
-   
- ▸ 网络与系统
-   [10] Exit Node  [12] 时区      [U] 🔄 更新脚本
-   [11] 1Panel     [13] Root SSH  [0] 退出
+ ▸ 服务与容器
+   [1] 注册服务    [4] Docker     [7] 添加路由
+   [2] 管理服务    [5] 容器管理    [8] 管理路由
+   [3] 定时任务    [6] Caddy      [9] Tailscale
+   
+ ▸ 网络与系统
+   [10] Exit Node  [12] 时区      [U] 🔄 更新脚本
+   [11] 1Panel     [13] Root SSH  [0] 退出
 ════════════════════════════════════════════════════════════
 EOF
         read -p "请选择 (支持 tt, tc, C1, L1): " choice
@@ -364,7 +366,7 @@ command_script_favorites() {
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    命令、脚本、链接收藏夹（云端：GitHub Repo）            ║"
+        echo "║    命令、脚本、链接收藏夹（云端：GitHub Repo）            ║"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -408,17 +410,17 @@ command_script_favorites() {
                     local display_url="${url:0:45}"
                     [[ ${#url} -gt 45 ]] && display_url="${display_url}..."
                     echo "[L$line_num] $name"
-                    echo "      🔗 $display_url"
+                    echo "      🔗 $display_url"
                     line_num=$((line_num + 1))
                 done < "$LINK_CACHE"
                 echo ""
             fi
         fi
         
-        echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
-        echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
-        echo "[7] 💾 下载脚本  [8] 🔗 添加链接 [9] 📋 查看链接详情"
-        echo "[R] 🔄 刷新     [0] 返回"
+        echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
+        echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
+        echo "[7] 💾 下载脚本  [8] 🔗 添加链接 [9] 📋 查看链接详情"
+        echo "[R] 🔄 刷新     [0] 返回"
         echo ""
         read -p "请选择 (支持 tt, C1, L1): " choice
         
@@ -551,11 +553,11 @@ show_link_detail() {
     
     clear
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    脚本链接详情 [L$id]"
+    echo "║    脚本链接详情 [L$id]"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
     echo "名称: $name"
-    echo "URL:  $url"
+    echo "URL:  $url"
     echo ""
     read -p "按回车继续..."
 }
@@ -683,7 +685,7 @@ delete_favorite() {
 reorder_favorites() {
     clear
     echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    重排编号功能                                            ║"
+    echo "║    重排编号功能                                            ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
     print_warning "此操作会重新分配 C/S 的 ID 为连续数字 (1, 2, 3...)"
@@ -856,227 +858,172 @@ cron_management() {
     sleep 2
 }
 
-add_caddy_route() {
-    print_info "Caddy 路由添加功能暂未实现"
-    sleep 2
-}
-add_caddy_route() {
-    clear
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    添加 Caddy 路由                                         ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    # 检查 Caddy
-    if ! command -v caddy &>/dev/null; then
-        print_error "Caddy 未安装"
-        sleep 2
-        return
-    fi
-    
-    # 输入域名
-    read -p "域名 (如 example.com): " domain
-    [[ -z "$domain" ]] && return
-    
-    # 输入路径
-    read -p "路径 (如 /api, 默认 /): " path
-    path=${path:-/}
-    [[ ! "$path" =~ ^/ ]] && path="/$path"
-    
-    # 输入后端
-    read -p "后端地址 (如 localhost:8080): " backend
-    [[ -z "$backend" ]] && return
-    
-    # 确认
-    echo ""
-    echo "域名: $domain"
-    echo "路径: $path"
-    echo "后端: $backend"
-    echo "说明: 自动配置 HTTP (80) 和 HTTPS (443)"
-    read -p "确认? [Y/n]: " confirm
-    [[ "$confirm" =~ ^[Nn]$ ]] && return
-    
-    # 保存
-    check_root
-    local max_id=$(jq '[.caddy_routes[].id] | max // 0' "$LOCAL_DATA" 2>/dev/null)
-    local new_id=$((max_id + 1))
-    
-    local new_route=$(jq -n \
-        --arg id "$new_id" \
-        --arg domain "$domain" \
-        --arg path "$path" \
-        --arg backend "$backend" \
-        '{
-            id: ($id | tonumber),
-            domain: $domain,
-            path: $path,
-            backend: $backend
-        }')
-    
-    jq ".caddy_routes += [$new_route]" "$LOCAL_DATA" > "$LOCAL_DATA.tmp" && \
-        mv "$LOCAL_DATA.tmp" "$LOCAL_DATA"
-    
-    print_success "路由已添加 [ID: $new_id]"
-    log_action "Added route: $domain$path -> $backend"
-    sleep 2
-}
+# ============================================================================
+# Caddy 路由修复和管理 (新增/修改)
+# ============================================================================
 
-delete_caddy_route() {
-    clear
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    删除 Caddy 路由                                         ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    
-    # 显示列表
-    local route_count=$(jq '.caddy_routes | length' "$LOCAL_DATA" 2>/dev/null)
-    if [[ "$route_count" == "0" || -z "$route_count" ]]; then
-        print_warning "暂无路由"
-        sleep 2
-        return
-    fi
-    
-    echo " ID  域名                      路径        后端"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    jq -r '.caddy_routes[] | "\(.id)|\(.domain)|\(.path)|\(.backend)"' "$LOCAL_DATA" 2>/dev/null | \
-        while IFS='|' read -r id domain path backend; do
-            printf " %-3s %-25s %-11s %s\n" "$id" "$domain" "$path" "$backend"
-        done
-    
-    echo ""
-    read -p "输入要删除的 ID: " route_id
-    [[ ! "$route_id" =~ ^[0-9]+$ ]] && return
-    
-    # 确认删除
-    local route_info=$(jq -r --arg id "$route_id" \
-        '.caddy_routes[] | select(.id == ($id | tonumber)) | 
-        "\(.domain)\(.path) -> \(.backend)"' "$LOCAL_DATA" 2>/dev/null)
-    
-    if [[ -z "$route_info" ]]; then
-        print_error "ID $route_id 不存在"
-        sleep 2
-        return
-    fi
-    
-    echo "将删除: $route_info"
-    read -p "确认? [y/N]: " confirm
-    [[ ! "$confirm" =~ ^[Yy]$ ]] && return
-    
-    # 删除
+add_caddy_route() {
     check_root
-    jq --arg id "$route_id" \
-        'del(.caddy_routes[] | select(.id == ($id | tonumber)))' \
-        "$LOCAL_DATA" > "$LOCAL_DATA.tmp" && mv "$LOCAL_DATA.tmp" "$LOCAL_DATA"
+    print_info "Caddy 路由添加向导 (使用 127.0.0.1 进行反向代理) "
     
-    print_success "删除成功"
-    log_action "Deleted route ID: $route_id"
-    sleep 2
-}
+    read -p "请输入域名 (如 example.com): " domain
+    [[ -z "$domain" ]] && print_error "域名不能为空" && sleep 1 && return
+    
+    read -p "请输入路径前缀 (如 /panel, /v2ray, 留空则为 /): " path_prefix
+    path_prefix=${path_prefix:-"/"}
+    
+    read -p "请输入后端本地端口 (如 39390): " local_port
+    [[ ! "$local_port" =~ ^[0-9]+$ ]] && print_error "端口号无效" && sleep 1 && return
 
-reload_caddy_config() {
-    clear
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    应用 Caddy 配置                                         ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
+    local proxy_target="127.0.0.1:$local_port"
+    local caddyfile_path="/etc/caddy/Caddyfile"
+    local new_route=""
     
-    check_root
-    
-    print_info "正在生成配置..."
-    
-    local caddyfile="/etc/caddy/Caddyfile"
-    local backup="/etc/caddy/Caddyfile.backup.$(date +%s)"
-    
-    # 备份
-    [[ -f "$caddyfile" ]] && cp "$caddyfile" "$backup"
-    
-    # 生成配置
-    {
-        echo "# Auto-generated by Tools v${VERSION}"
-        echo "# Generated at: $(date)"
-        echo ""
-        
-        # 按域名分组
-        local domains=$(jq -r '.caddy_routes[].domain' "$LOCAL_DATA" 2>/dev/null | sort -u)
-        
-        while IFS= read -r domain; do
-            [[ -z "$domain" ]] && continue
-            
-            echo "${domain} {"
-            
-            # 该域名下的所有路由
-            jq -r --arg domain "$domain" \
-                '.caddy_routes[] | select(.domain == $domain) | "\(.path)|\(.backend)"' \
-                "$LOCAL_DATA" 2>/dev/null | while IFS='|' read -r path backend; do
-                echo "    handle ${path} {"
-                echo "        reverse_proxy ${backend}"
-                echo "    }"
-            done
-            
-            echo "}"
-            echo ""
-        done <<< "$domains"
-        
-    } > "$caddyfile"
-    
-    # 验证
-    if ! caddy validate --config "$caddyfile" &>/dev/null; then
-        print_error "配置验证失败"
-        [[ -f "$backup" ]] && mv "$backup" "$caddyfile"
-        sleep 2
-        return
-    fi
-    
-    # 重启
-    print_info "正在重启 Caddy..."
-    if systemctl restart caddy; then
-        print_success "Caddy 已重启"
-        log_action "Reloaded Caddy config"
+    # 查找或创建域名配置块
+    if grep -q "^$domain {" "$caddyfile_path"; then
+        # 域名已存在，将新路由插入到最后一个 } 之前
+        new_route=$(cat <<EOF
+    handle $path_prefix* {
+        reverse_proxy $proxy_target
+    }
+EOF
+)
+        # 使用 sed 插入到倒数第二个 } 之前 (注意：这在复杂的Caddyfile中可能不可靠)
+        # 尝试追加到文件末尾，让用户自行调整
+        echo -e "\n# --- Route Added by tools.sh ---" | sudo tee -a "$caddyfile_path" > /dev/null
+        echo -e "$domain {" | sudo tee -a "$caddyfile_path" > /dev/null
+        echo -e "$new_route" | sudo tee -a "$caddyfile_path" > /dev/null
+        echo -e "}" | sudo tee -a "$caddyfile_path" > /dev/null
+        print_warning "新的路由配置已追加到 $caddyfile_path 末尾，请手动检查重复的域名块并清理。"
     else
-        print_error "重启失败"
-        [[ -f "$backup" ]] && mv "$backup" "$caddyfile"
-    fi
-    
-    sleep 2
+        # 域名不存在，创建新的配置块
+        new_route=$(cat <<EOF
+$domain {
+    handle $path_prefix* {
+        reverse_proxy $proxy_target
+    }
 }
+EOF
+)
+        # 将新配置追加到文件末尾
+        echo -e "\n# --- Route Added by tools.sh ---" | sudo tee -a "$caddyfile_path" > /dev/null
+        echo -e "$new_route" | sudo tee -a "$caddyfile_path" > /dev/null
+    fi
+
+    # 保存到本地记录 (方便管理和删除)
+    local up=$(jq ".caddy_routes += [{\"domain\":\"$domain\", \"path\":\"$path_prefix\", \"port\":\"$local_port\"}]" "$LOCAL_DATA")
+    echo "$up" > "$LOCAL_DATA"
+    
+    # 重新加载 Caddy 服务
+    if sudo systemctl reload caddy; then
+        print_success "路由添加成功，Caddy 已重新加载!"
+        print_info "访问地址: https://$domain$path_prefix"
+    else
+        print_error "Caddy 重载失败，请检查 Caddyfile 语法 (按 8 进入管理菜单查看日志)"
+    fi
+    sleep 3
+}
+
 manage_caddy_routes() {
+    check_root
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    Caddy 路由管理                                          ║"
+        echo "║    Caddy 路由管理"
         echo "╚════════════════════════════════════════════════════════════╝"
-        echo ""
         
-        # 显示当前路由
-        local route_count=$(jq '.caddy_routes | length' "$LOCAL_DATA" 2>/dev/null)
-        if [[ "$route_count" == "0" || -z "$route_count" ]]; then
-            print_warning "暂无路由配置"
+        local routes=$(jq -r '.caddy_routes[] | "\(.domain) | \(.path) | \(.port)"' "$LOCAL_DATA" 2>/dev/null)
+        if [[ -z "$routes" ]]; then
+            print_warning "暂无已配置的路由"
+            echo ""
         else
-            echo " ID  域名                      路径        后端"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            jq -r '.caddy_routes[] | "\(.id)|\(.domain)|\(.path)|\(.backend)"' "$LOCAL_DATA" 2>/dev/null | \
-                while IFS='|' read -r id domain path backend; do
-                    printf " %-3s %-25s %-11s %s\n" "$id" "$domain" "$path" "$backend"
-                done
+            echo " ▸ 已配置路由 (ID | 域名 | 路径 | 端口)"
+            echo "$routes" | nl -w2 -s' | '
+            echo ""
         fi
         
-        echo ""
-        echo "[1] 添加路由 (自动配置 HTTP 80 + HTTPS 443)"
-        echo "[2] 删除路由"
-        echo "[3] 应用配置并重启 Caddy"
-        echo "[0] 返回"
-        echo ""
-        read -p "请选择: " choice
-        
+        read -p "[R]重新加载 [D]删除记录 [L]查看日志 [E]编辑Caddyfile [0]返回: " choice
+        [[ "$choice" == "0" ]] && return
+
         case $choice in
-            1) add_caddy_route ;;
-            2) delete_caddy_route ;;
-            3) reload_caddy_config ;;
-            0) return ;;
-            *) print_error "无效选择"; sleep 0.5 ;;
+            [Rr])
+                if sudo systemctl reload caddy; then
+                    print_success "Caddy 重新加载成功"
+                else
+                    print_error "Caddy 重载失败，请检查语法"
+                    journalctl -u caddy -n 10 --no-pager
+                fi
+                sleep 2
+                ;;
+            [Dd])
+                read -p "输入要删除的路由 ID: " n
+                if [[ ! "$n" =~ ^[0-9]+$ ]] || [[ "$n" -eq 0 ]]; then continue; fi
+                
+                local index=$((n-1))
+                local route_info=$(jq -r ".caddy_routes[$index] | \"\(.domain)|\(.path)|\(.port)\"" "$LOCAL_DATA" 2>/dev/null)
+                
+                if [[ -z "$route_info" ]]; then print_error "ID 无效"; sleep 1; continue; fi
+
+                local domain=$(echo "$route_info" | cut -d'|' -f1)
+                local path=$(echo "$route_info" | cut -d'|' -f2)
+                
+                print_warning "您正在删除路由记录 $domain $path -> 127.0.0.1:$port"
+                print_error "⚠️ 警告：本工具无法自动修改 Caddyfile，请您手动编辑 /etc/caddy/Caddyfile 移除相关配置。"
+                read -p "确认要删除 local.json 中的记录? (请先手动清理 Caddyfile) [y/N]: " confirmed
+                
+                if [[ "$confirmed" =~ ^[Yy]$ ]]; then
+                    # 从 local.json 中删除记录
+                    jq "del(.caddy_routes[$index])" "$LOCAL_DATA" > "$LOCAL_DATA.tmp" && mv "$LOCAL_DATA.tmp" "$LOCAL_DATA"
+                    print_success "路由记录删除成功！请确保 Caddyfile 已手动清理并重载 Caddy (R)"
+                else
+                    print_info "取消删除"
+                fi
+                sleep 3
+                ;;
+            [Ee])
+                nano /etc/caddy/Caddyfile
+                ;;
+            [Ll])
+                journalctl -u caddy -n 50 --no-pager
+                read -p "按回车继续..."
+                ;;
+            *)
+                print_error "无效选择"
+                sleep 1
+                ;;
         esac
     done
 }
+
+
+install_caddy() {
+    check_root
+    print_info "正在安装 Caddy..."
+    # 确保依赖安装
+    apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    
+    # Caddy 官方安装流程
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update && apt-get install -y caddy
+    
+    # 确保 Caddyfile 存在，并尝试启动
+    if [[ ! -f "/etc/caddy/Caddyfile" ]]; then
+        # 默认使用 http://example.com 自动申请证书并代理到 8080 (标准 Caddy 默认配置)
+        echo -e ":80 {\n\treverse_proxy localhost:8080\n}" | sudo tee /etc/caddy/Caddyfile > /dev/null
+        print_info "已创建默认 Caddyfile，代理到 localhost:8080"
+    fi
+
+    # 启用并启动服务
+    sudo systemctl enable caddy
+    sudo systemctl start caddy
+    
+    print_success "Caddy 安装并启动完成"; 
+    sleep 2
+}
+# ============================================================================
+# 其他原有功能 (保持不变)
+# ============================================================================
 
 configure_exit_node() {
     print_info "Exit Node 配置功能暂未实现"
@@ -1114,13 +1061,6 @@ docker_container_management() {
     done
 }
 
-install_caddy() {
-    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update && apt-get install -y caddy
-    print_success "Caddy 安装完成"; sleep 2
-}
 
 install_tailscale() { 
     curl -fsSL https://tailscale.com/install.sh | sh

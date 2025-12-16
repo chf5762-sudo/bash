@@ -3,8 +3,9 @@
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.7.0 (GitHub Repo Edition)
+# 版本: v2.8.0 (GitHub Repo Edition + Script Links)
 # 功能: Ubuntu Server 轻量运维工具箱
+# 新增: 脚本链接管理功能（L1, L2...）
 # 安装位置: /usr/local/bin/t
 #           /usr/local/bin/tt (粘贴并执行快捷方式)
 #           /usr/local/bin/tc (收藏夹快捷方式)
@@ -15,7 +16,7 @@
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.7.0"
+VERSION="2.8.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 LINK_TT="/usr/local/bin/tt"
@@ -69,7 +70,7 @@ init_config() {
         echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
     fi
     if [[ ! -f "$CACHE_FILE" ]]; then
-        echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+        echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"
     fi
 }
 
@@ -157,7 +158,7 @@ sync_to_cloud() {
 }
 
 init_cloud_data() {
-    echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"
     sync_to_cloud silent
 }
 
@@ -204,6 +205,16 @@ EOF
             echo ""
         fi
         
+        # 显示脚本链接（最多3个）
+        local link_count=$(jq -r '.links | length' "$CACHE_FILE" 2>/dev/null)
+        if [[ "$link_count" -gt 0 ]]; then
+            echo " ▸ 快速脚本 (🔗 一键执行)"
+            jq -r '.links[] | "\(.id)|\(.name)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id name; do
+                echo "   [L$id] $name"
+            done
+            echo ""
+        fi
+        
         cat <<'EOF'
  ▸ 服务与容器
    [1] 注册服务    [4] Docker     [7] 添加路由
@@ -215,12 +226,12 @@ EOF
    [11] 1Panel     [13] Root SSH  [0] 退出
 ════════════════════════════════════════════════════════════
 EOF
-        read -p "请选择 (支持 tt, tc, C1): " choice
+        read -p "请选择 (支持 tt, tc, C1, L1): " choice
         local raw_choice="$choice"
         choice=$(echo "$choice" | tr '[:lower:]' '[:upper:]')
         
-        # 支持直接输入 C1 / S2
-        if [[ "$choice" =~ ^[CS][0-9]+$ ]]; then
+        # 支持直接输入 C1 / S2 / L1
+        if [[ "$choice" =~ ^[CSL][0-9]+$ ]]; then
             execute_direct_by_string "$choice"
             continue
         fi
@@ -253,25 +264,25 @@ EOF
 }
 
 # ============================================================================
-# [C] 收藏夹 (GitHub Repo 版)
+# [C] 收藏夹 (GitHub Repo 版 + 脚本链接)
 # ============================================================================
 
 command_script_favorites() {
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    命令、脚本收藏夹（云端：GitHub Repo）                  ║"
+        echo "║    命令、脚本、链接收藏夹（云端：GitHub Repo）            ║"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
-        if [[ ! -f "$CACHE_FILE" ]]; then echo "{}" > "$CACHE_FILE"; fi
+        if [[ ! -f "$CACHE_FILE" ]]; then echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"; fi
 
-        local has_data=$(jq -r '(.commands | length) + (.scripts | length)' "$CACHE_FILE" 2>/dev/null)
+        local has_data=$(jq -r '(.commands | length) + (.scripts | length) + (.links | length)' "$CACHE_FILE" 2>/dev/null)
         
         if [[ "$has_data" == "0" || -z "$has_data" ]]; then
             print_warning "暂无数据 (按 R 刷新)"
         else
-            # 批量渲染命令 (仅一次 jq 调用)
+            # 批量渲染命令
             local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)|\(.favorite // false)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$cmd_list" ]]; then
                 echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
@@ -283,7 +294,7 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本 (仅一次 jq 调用)
+            # 批量渲染脚本
             local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$script_list" ]]; then
                 echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
@@ -292,16 +303,30 @@ command_script_favorites() {
                 done <<< "$script_list"
                 echo ""
             fi
+            
+            # 批量渲染脚本链接
+            local link_list=$(jq -r '.links[] | "\(.id)|\(.name)|\(.url)"' "$CACHE_FILE" 2>/dev/null)
+            if [[ -n "$link_list" ]]; then
+                echo -e "${GREEN}═══ 脚本链接 ═══${NC}"
+                while IFS='|' read -r id name url; do
+                    local display_url="${url:0:45}"
+                    [[ ${#url} -gt 45 ]] && display_url="${display_url}..."
+                    echo "[L$id] $name"
+                    echo "      🔗 $display_url"
+                done <<< "$link_list"
+                echo ""
+            fi
         fi
         
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
         echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
-        echo "[7] 💾 下载脚本  [R] 🔄 刷新     [0] 返回"
+        echo "[7] 💾 下载脚本  [8] 🔗 添加链接 [9] 📋 查看链接详情"
+        echo "[R] 🔄 刷新     [0] 返回"
         echo ""
-        read -p "请选择 (支持 tt, C1): " choice
+        read -p "请选择 (支持 tt, C1, L1): " choice
         
-        # 菜单内直接支持 C1/S1
-        if [[ "$choice" =~ ^[Cc][0-9]+$ ]] || [[ "$choice" =~ ^[Ss][0-9]+$ ]]; then
+        # 菜单内直接支持 C1/S1/L1
+        if [[ "$choice" =~ ^[CcSsLl][0-9]+$ ]]; then
              execute_direct_by_string "$choice"
              continue
         fi
@@ -315,6 +340,8 @@ command_script_favorites() {
             5) reorder_favorites ;;
             6) toggle_favorite ;;
             7) download_script ;;
+            8) add_link_favorite ;;
+            9) show_link_detail ;;
             [Rr]) 
                 sync_from_cloud 
                 IS_SYNCED="true"
@@ -332,6 +359,7 @@ execute_direct_by_string() {
     case "${type^^}" in
         C) execute_command_favorite "$id" ;;
         S) execute_script_favorite "$id" ;;
+        L) execute_link_favorite "$id" ;;
     esac
 }
 
@@ -368,9 +396,78 @@ add_script_favorite() {
     sleep 1
 }
 
+add_link_favorite() {
+    echo ""
+    read -p "脚本名称: " link_name
+    [[ -z "$link_name" ]] && return
+    
+    read -p "脚本 URL (支持 raw 链接): " link_url
+    [[ -z "$link_url" ]] && return
+    
+    # 验证 URL 格式
+    if ! [[ "$link_url" =~ ^https?:// ]]; then
+        print_error "URL 必须以 http:// 或 https:// 开头"
+        sleep 1
+        return
+    fi
+    
+    sync_from_cloud silent
+    local max_id=$(jq '[.links[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
+    local new_id=$((max_id + 1))
+    
+    local new_link=$(jq -n \
+        --arg id "$new_id" \
+        --arg name "$link_name" \
+        --arg url "$link_url" \
+        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{id: ($id | tonumber), name: $name, url: $url, added_time: $time}')
+    
+    jq ".links += [$new_link]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    
+    sync_to_cloud silent && print_success "已保存 [L$new_id]" || print_error "云端同步失败"
+    sleep 1
+}
+
+show_link_detail() {
+    echo ""
+    read -p "输入链接编号 (如 L1): " input
+    local type="${input:0:1}"
+    local id="${input:1}"
+    
+    if [[ "${type^^}" != "L" ]]; then
+        print_error "仅支持链接查看 (L1, L2...)"
+        sleep 1
+        return
+    fi
+    
+    [[ ! "$id" =~ ^[0-9]+$ ]] && return
+    
+    local found=$(jq ".links[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+    if [[ -z "$found" ]]; then
+        print_error "未找到 L$id"
+        sleep 1
+        return
+    fi
+    
+    local name=$(echo "$found" | jq -r '.name')
+    local url=$(echo "$found" | jq -r '.url')
+    local added_time=$(echo "$found" | jq -r '.added_time')
+    
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║    脚本链接详情 [L$id]"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "名称: $name"
+    echo "URL:  $url"
+    echo "添加时间: $added_time"
+    echo ""
+    read -p "按回车继续..."
+}
+
 execute_favorite() {
     echo ""
-    read -p "输入编号 (如 C1, S2): " input
+    read -p "输入编号 (如 C1, S2, L1): " input
     execute_direct_by_string "$input"
 }
 
@@ -401,17 +498,72 @@ execute_script_favorite() {
     echo ""; read -p "按回车继续..."
 }
 
+execute_link_favorite() {
+    local id="$1"
+    local found=$(jq ".links[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
+    
+    if [[ -z "$found" ]]; then
+        print_error "未找到 L$id"
+        sleep 1
+        return
+    fi
+    
+    local name=$(echo "$found" | jq -r '.name')
+    local url=$(echo "$found" | jq -r '.url')
+    
+    echo ""
+    print_info "脚本: $name"
+    print_info "URL: $url"
+    echo ""
+    read -p "参数? [留空跳过]: " params
+    
+    local temp_script="/tmp/tools-link-$RANDOM.sh"
+    
+    echo ""
+    print_info "正在下载脚本..."
+    
+    if curl -fsSL -o "$temp_script" "$url"; then
+        chmod +x "$temp_script"
+        print_success "下载完成，开始执行..."
+        echo ""
+        echo "════════════════════════════════════════════════════════════"
+        bash "$temp_script" $params
+        echo "════════════════════════════════════════════════════════════"
+        rm -f "$temp_script"
+        log_action "Executed link L$id: $name"
+    else
+        print_error "下载失败，请检查 URL 是否正确"
+        rm -f "$temp_script"
+    fi
+    
+    echo ""
+    read -p "按回车继续..."
+}
+
 delete_favorite() {
-    read -p "输入删除编号 (C1/S2): " input
+    read -p "输入删除编号 (C1/S2/L1): " input
     local type="${input:0:1}"
     local id="${input:1}"
     [[ ! "$id" =~ ^[0-9]+$ ]] && return
     sync_from_cloud silent
-    if [[ "${type^^}" == "C" ]]; then
-        jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
-    else
-        jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
-    fi
+    
+    case "${type^^}" in
+        C)
+            jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            ;;
+        S)
+            jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            ;;
+        L)
+            jq "del(.links[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            ;;
+        *)
+            print_error "无效类型"
+            sleep 1
+            return
+            ;;
+    esac
+    
     sync_to_cloud silent && print_success "删除成功" || print_error "同步失败"
     sleep 1
 }
@@ -437,11 +589,15 @@ reorder_favorites() {
     # 重排脚本 ID
     jq '.scripts | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.scripts"
     
+    # 重排链接 ID
+    jq '.links | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.links"
+    
     # 合并结果
     jq -n \
         --slurpfile cmds "$temp_file.commands" \
         --slurpfile scripts "$temp_file.scripts" \
-        '{commands: $cmds[0], scripts: $scripts[0]}' > "$CACHE_FILE.tmp"
+        --slurpfile links "$temp_file.links" \
+        '{commands: $cmds[0], scripts: $scripts[0], links: $links[0]}' > "$CACHE_FILE.tmp"
     
     mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     rm -f "$temp_file"*
@@ -677,10 +833,10 @@ check_and_install() {
 
 handle_cli_args() {
     case "$1" in
-        --help|-h) echo "Usage: t [C1|S1] | tt | tc"; exit 0 ;;
+        --help|-h) echo "Usage: t [C1|S1|L1] | tt | tc"; exit 0 ;;
         [Tt][Tt]) run_script_from_paste; exit 0 ;;
         [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
-        [Cc][0-9]*|[Ss][0-9]*)
+        [CcSsLl][0-9]*)
             init_config
             sync_from_cloud silent 
             execute_direct_by_string "$1"

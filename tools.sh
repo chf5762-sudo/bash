@@ -297,10 +297,13 @@ EOF
             local link_count=$(grep -c "^" "$LINK_CACHE" 2>/dev/null || echo "0")
             if [[ "$link_count" -gt 0 ]]; then
                 echo " ▸ 快速脚本 (🔗 一键执行)"
-                head -3 "$LINK_CACHE" | nl -v 1 | while read -r id line; do
-                    local name=$(echo "$line" | cut -d'|' -f1)
-                    echo "   [L$id] $name"
-                done
+                local line_num=1
+                while IFS='|' read -r name url; do
+                    [[ -z "$name" ]] && continue
+                    echo "   [L$line_num] $name"
+                    line_num=$((line_num + 1))
+                    [[ $line_num -gt 3 ]] && break
+                done < "$LINK_CACHE"
                 echo ""
             fi
         fi
@@ -399,14 +402,15 @@ command_script_favorites() {
             # 批量渲染脚本链接（从 txt 文件）
             if [[ -f "$LINK_CACHE" && -s "$LINK_CACHE" ]]; then
                 echo -e "${GREEN}═══ 脚本链接 ═══${NC}"
-                nl -v 1 "$LINK_CACHE" | while read -r id line; do
-                    local name=$(echo "$line" | cut -d'|' -f1)
-                    local url=$(echo "$line" | cut -d'|' -f2)
+                local line_num=1
+                while IFS='|' read -r name url; do
+                    [[ -z "$name" ]] && continue
                     local display_url="${url:0:45}"
                     [[ ${#url} -gt 45 ]] && display_url="${display_url}..."
-                    echo "[L$id] $name"
+                    echo "[L$line_num] $name"
                     echo "      🔗 $display_url"
-                done
+                    line_num=$((line_num + 1))
+                done < "$LINK_CACHE"
                 echo ""
             fi
         fi

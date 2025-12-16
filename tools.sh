@@ -33,9 +33,11 @@ TOKEN_P3="nwSVJtqbNWYH4FgpIN"
 GH_TOKEN="${TOKEN_P1}${TOKEN_P2}${TOKEN_P3}"
 GH_OWNER="chf5762-sudo"
 GH_REPO="bash"
-GH_FILE="tools.json"
 GH_BRANCH="main"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh"
+
+# 当前使用的数据文件（可切换）
+CURRENT_FILE="tools.json"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -77,26 +79,15 @@ log_action() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_DIR/tools.log"
 }
 
-# 压缩/解压函数
-compress_content() {
-    local content="$1"
-    echo "$content" | gzip -c | base64 -w 0
-}
-
-decompress_content() {
-    local compressed="$1"
-    echo "$compressed" | base64 -d | gzip -d 2>/dev/null
-}
-
 # ============================================================================
 # 云端数据同步 (GitHub Repo)
 # ============================================================================
 
 sync_from_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在从云端同步..."
+    [[ "$silent" != "silent" ]] && print_info "正在从云端同步 ($CURRENT_FILE)..."
     
-    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$CURRENT_FILE?ref=$GH_BRANCH"
     local response=$(curl -s -H "Authorization: token $GH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "$api_url" 2>/dev/null)
@@ -109,7 +100,7 @@ sync_from_cloud() {
     local content=$(echo "$response" | jq -r '.content' 2>/dev/null)
     
     if [[ -z "$content" || "$content" == "null" ]]; then
-        [[ "$silent" != "silent" ]] && print_warning "云端数据为空，初始化中..."
+        [[ "$silent" != "silent" ]] && print_warning "云端文件不存在，将自动创建"
         init_cloud_data
         return 1
     fi
@@ -121,35 +112,41 @@ sync_from_cloud() {
 
 sync_to_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在推送到云端..."
+    [[ "$silent" != "silent" ]] && print_info "正在推送到云端 ($CURRENT_FILE)..."
     
     if [[ ! -f "$CACHE_FILE" ]]; then
         print_error "本地缓存不存在"
         return 1
     fi
     
-    # 先获取当前文件的 SHA
-    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
+    # 先获取当前文件的 SHA（如果文件不存在，SHA 为空也没关系）
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$CURRENT_FILE?ref=$GH_BRANCH"
     local file_info=$(curl -s -H "Authorization: token $GH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "$api_url" 2>/dev/null)
     
     local current_sha=$(echo "$file_info" | jq -r '.sha' 2>/dev/null)
     
-    if [[ -z "$current_sha" || "$current_sha" == "null" ]]; then
-        [[ "$silent" != "silent" ]] && print_error "获取文件 SHA 失败"
-        return 1
-    fi
-    
     local content_base64=$(base64 -w 0 "$CACHE_FILE")
-    local commit_msg="Update tools.json via client v$VERSION ($(date +%Y-%m-%d))"
+    local commit_msg="Update $CURRENT_FILE via client v$VERSION ($(date +%Y-%m-%d))"
     
-    local payload=$(jq -n \
-        --arg msg "$commit_msg" \
-        --arg content "$content_base64" \
-        --arg sha "$current_sha" \
-        --arg branch "$GH_BRANCH" \
-        '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+    local payload
+    if [[ -z "$current_sha" || "$current_sha" == "null" ]]; then
+        # 文件不存在，创建新文件（不需要 SHA）
+        payload=$(jq -n \
+            --arg msg "$commit_msg" \
+            --arg content "$content_base64" \
+            --arg branch "$GH_BRANCH" \
+            '{message: $msg, content: $content, branch: $branch}')
+    else
+        # 文件存在，更新文件（需要 SHA）
+        payload=$(jq -n \
+            --arg msg "$commit_msg" \
+            --arg content "$content_base64" \
+            --arg sha "$current_sha" \
+            --arg branch "$GH_BRANCH" \
+            '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+    fi
     
     local response=$(curl -s -X PUT \
         -H "Authorization: token $GH_TOKEN" \
@@ -159,10 +156,10 @@ sync_to_cloud() {
     
     if echo "$response" | grep -q '"content":'; then
         [[ "$silent" != "silent" ]] && print_success "推送完成"
-        log_action "Synced to cloud (GitHub Repo)"
+        log_action "Synced to cloud ($CURRENT_FILE)"
         return 0
     else
-        [[ "$silent" != "silent" ]] && print_error "推送失败"
+        [[ "$silent" != "silent" ]] && print_error "推送失败: $(echo "$response" | jq -r '.message // "Unknown error"')"
         return 1
     fi
 }
@@ -271,7 +268,7 @@ command_script_favorites() {
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    命令、脚本收藏夹（云端：GitHub Repo）                  ║"
+        echo "║    命令、脚本收藏夹（云端：$CURRENT_FILE）                ║"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -282,7 +279,7 @@ command_script_favorites() {
         if [[ "$has_data" == "0" || -z "$has_data" ]]; then
             print_warning "暂无数据 (按 R 刷新)"
         else
-            # 批量渲染命令 (仅一次 jq 调用)
+            # 批量渲染命令
             local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)|\(.favorite // false)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$cmd_list" ]]; then
                 echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
@@ -294,7 +291,7 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本 (仅一次 jq 调用)
+            # 批量渲染脚本
             local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$script_list" ]]; then
                 echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
@@ -307,7 +304,8 @@ command_script_favorites() {
         
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
         echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
-        echo "[7] 💾 下载脚本  [R] 🔄 刷新     [0] 返回"
+        echo "[7] 💾 下载脚本  [8] 📁 切换文件  [R] 🔄 刷新"
+        echo "[0] 返回"
         echo ""
         read -p "请选择 (支持 tt, C1): " choice
         
@@ -326,6 +324,7 @@ command_script_favorites() {
             5) reorder_favorites ;;
             6) toggle_favorite ;;
             7) download_script ;;
+            8) switch_data_file ;;
             [Rr]) 
                 sync_from_cloud 
                 IS_SYNCED="true"
@@ -367,36 +366,16 @@ add_script_favorite() {
     local temp_script="/tmp/tools-script-$RANDOM.txt"
     cat > "$temp_script"
     [[ ! -s "$temp_script" ]] && { rm "$temp_script"; return; }
-    
     local content=$(cat "$temp_script")
     local lines=$(wc -l < "$temp_script")
-    local original_size=$(wc -c < "$temp_script")
-    
-    # 压缩内容
-    print_info "正在压缩脚本..."
-    local compressed=$(compress_content "$content")
-    local compressed_size=${#compressed}
-    
     sync_from_cloud silent
     local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
     local new_id=$((max_id + 1))
-    
-    local new_obj=$(jq -n \
-        --arg id "$new_id" \
-        --arg name "$script_name" \
-        --arg content "$compressed" \
-        --arg lines "$lines" \
-        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{id: ($id | tonumber), name: $name, content: $content, compressed: true, lines: ($lines | tonumber), added_time: $time}')
-    
+    local new_obj=$(jq -n --arg id "$new_id" --arg name "$script_name" --arg content "$content" --arg lines "$lines" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), added_time: $time}')
     jq ".scripts += [$new_obj]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     rm "$temp_script"
-    
-    local ratio=$(awk "BEGIN {printf \"%.1f\", (1 - $compressed_size / $original_size) * 100}")
-    print_success "已保存 [S$new_id] (压缩率: ${ratio}%)"
-    
-    sync_to_cloud silent || print_error "云端同步失败"
-    sleep 2
+    sync_to_cloud silent && print_success "已保存 [S$new_id]" || print_error "云端同步失败"
+    sleep 1
 }
 
 execute_favorite() {
@@ -419,21 +398,8 @@ execute_script_favorite() {
     local id="$1"
     local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
     if [[ -z "$found" ]]; then print_error "未找到 S$id"; sleep 1; return; fi
-    
     local name=$(echo "$found" | jq -r '.name')
     local content=$(echo "$found" | jq -r '.content')
-    local is_compressed=$(echo "$found" | jq -r '.compressed // false')
-    
-    # 如果是压缩的，先解压
-    if [[ "$is_compressed" == "true" ]]; then
-        content=$(decompress_content "$content")
-        if [[ -z "$content" ]]; then
-            print_error "脚本解压失败"
-            sleep 1
-            return
-        fi
-    fi
-    
     echo ""; print_info "执行脚本: $name"; echo ""
     read -p "参数? [留空跳过]: " params
     local temp_script="/tmp/tools-exec-$RANDOM.sh"
@@ -556,18 +522,6 @@ download_script() {
     
     local name=$(echo "$found" | jq -r '.name')
     local content=$(echo "$found" | jq -r '.content')
-    local is_compressed=$(echo "$found" | jq -r '.compressed // false')
-    
-    # 如果是压缩的，先解压
-    if [[ "$is_compressed" == "true" ]]; then
-        print_info "正在解压脚本..."
-        content=$(decompress_content "$content")
-        if [[ -z "$content" ]]; then
-            print_error "脚本解压失败"
-            sleep 1
-            return
-        fi
-    fi
     
     # 生成安全的文件名
     local safe_name=$(echo "$name" | tr ' ' '_' | tr -cd '[:alnum:]_.-')
@@ -588,6 +542,44 @@ download_script() {
     
     echo ""
     read -p "按回车继续..."
+}
+
+switch_data_file() {
+    clear
+    echo "╔════════════════════════════════════════════════════════════╗"
+    echo "║    切换数据文件                                            ║"
+    echo "╚════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "当前文件: ${CYAN}$CURRENT_FILE${NC}"
+    echo ""
+    echo "常用文件:"
+    echo "  tools.json, tools-1.json, tools-2.json, ..."
+    echo ""
+    read -p "输入文件名 [如: tools-1.json]: " new_file
+    
+    if [[ -z "$new_file" ]]; then
+        print_warning "未输入文件名"
+        sleep 1
+        return
+    fi
+    
+    # 确保文件名以 .json 结尾
+    [[ ! "$new_file" =~ \.json$ ]] && new_file="${new_file}.json"
+    
+    CURRENT_FILE="$new_file"
+    
+    print_info "切换到: $CURRENT_FILE"
+    print_info "正在同步..."
+    
+    if sync_from_cloud; then
+        print_success "切换成功"
+        log_action "Switched to $CURRENT_FILE"
+    else
+        print_warning "文件不存在，将自动创建"
+        init_cloud_data
+    fi
+    
+    sleep 2
 }
 
 # ============================================================================

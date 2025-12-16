@@ -7,13 +7,55 @@
 # 功能: Ubuntu Server 轻量运维工具箱
 # 新增: 脚本可标记为常用、主页显示常用脚本、固定 server_manage_services() {
     while true; do
-        clear; echo "已注册服务:"; jq -r '.services[].name' "$LOCAL_DATA" | nl
-        echo ""; read -p "[S]启 [P]停 [R]重启 [L]日志 [0]返: " c
+        clear
+        echo "已注册服务:"
+        
+        # 确保文件存在
+        if [[ ! -f "$LOCAL_DATA" ]]; then
+            echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
+        fi
+        
+        # 检查是否有服务
+        local service_count=$(jq -r '.services | length' "$LOCAL_DATA" 2>/dev/null || echo "0")
+        
+        if [[ "$service_count" == "0" ]]; then
+            print_warning "暂无已注册服务"
+        else
+            jq -r '.services[].name' "$LOCAL_DATA" 2>/dev/null | nl
+        fi
+        
+        echo ""
+        read -p "[S]启 [P]停 [R]重启 [L]日志 [0]返回: " c
         [[ $c == 0 ]] && return
-        read -p "编号: " n; name=$(jq -r ".services[$((n-1))].name" "$LOCAL_DATA")
+        
+        if [[ "$service_count" == "0" ]]; then
+            print_error "没有可操作的服务"
+            sleep 1
+            continue
+        fi
+        
+        read -p "编号: " n
+        
+        if [[ ! "$n" =~ ^[0-9]+$ ]] || [[ $n -lt 1 ]] || [[ $n -gt $service_count ]]; then
+            print_error "无效编号"
+            sleep 1
+            continue
+        fi
+        
+        local name=$(jq -r ".services[$((n-1))].name" "$LOCAL_DATA" 2>/dev/null)
+        
+        if [[ -z "$name" || "$name" == "null" ]]; then
+            print_error "服务不存在"
+            sleep 1
+            continue
+        fi
+        
         case $c in
-            S|s) systemctl start "$name" ;; P|p) systemctl stop "$name" ;;
-            R|r) systemctl restart "$name" ;; L|l) journalctl -u "$name" -n 20; read -p "..." ;;
+            S|s) systemctl start "$name" && print_success "已启动 $name" || print_error "启动失败"; sleep 1 ;;
+            P|p) systemctl stop "$name" && print_success "已停止 $name" || print_error "停止失败"; sleep 1 ;;
+            R|r) systemctl restart "$name" && print_success "已重启 $name" || print_error "重启失败"; sleep 1 ;;
+            L|l) clear; echo "=== $name 日志 (最近20行) ==="; journalctl -u "$name" -n 20 --no-pager; echo ""; read -p "按回车继续..." ;;
+            *) print_error "无效操作"; sleep 1 ;;
         esac
     done
 }

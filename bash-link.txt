@@ -1,2 +1,3 @@
 
 server-manager|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/server_manager
+KejiLion.sh|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/kejilion.sh

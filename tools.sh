@@ -428,16 +428,23 @@ reorder_favorites() {
     
     sync_from_cloud silent
     
+    # 使用临时文件逐步处理，避免 jq 内存问题
+    local temp_file="/tmp/reorder-$RANDOM.json"
+    
     # 重排命令 ID
-    local reordered_commands=$(jq '[.commands | sort_by(.id) | to_entries | .[] | .value | .id = (.key + 1)]' "$CACHE_FILE")
+    jq '.commands | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.commands"
     
     # 重排脚本 ID
-    local reordered_scripts=$(jq '[.scripts | sort_by(.id) | to_entries | .[] | .value | .id = (.key + 1)]' "$CACHE_FILE")
+    jq '.scripts | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.scripts"
     
-    # 合并
-    jq --argjson cmds "$reordered_commands" --argjson scripts "$reordered_scripts" \
-        '.commands = $cmds | .scripts = $scripts' "$CACHE_FILE" > "$CACHE_FILE.tmp" && \
-        mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    # 合并结果
+    jq -n \
+        --slurpfile cmds "$temp_file.commands" \
+        --slurpfile scripts "$temp_file.scripts" \
+        '{commands: $cmds[0], scripts: $scripts[0]}' > "$CACHE_FILE.tmp"
+    
+    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    rm -f "$temp_file"*
     
     sync_to_cloud silent && print_success "重排完成" || print_error "同步失败"
     sleep 2

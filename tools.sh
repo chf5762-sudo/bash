@@ -241,12 +241,30 @@ check_root() {
 }
 
 init_config() {
-    mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+    # 确保目录存在
+    mkdir -p "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || {
+        # 如果没有权限创建系统目录，使用当前目录
+        CONFIG_DIR="$HOME/.tools"
+        LOG_DIR="$HOME/.tools/logs"
+        LOCAL_DATA="$CONFIG_DIR/local.json"
+        CACHE_FILE="$CONFIG_DIR/cloud_cache.json"
+        mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+    }
+    
+    # 初始化本地数据文件
     if [[ ! -f "$LOCAL_DATA" ]]; then
         echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
     fi
+    
+    # 初始化云端缓存文件
     if [[ ! -f "$CACHE_FILE" ]]; then
         echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    fi
+    
+    # 确认文件可读写
+    if [[ ! -w "$LOCAL_DATA" ]] || [[ ! -w "$CACHE_FILE" ]]; then
+        print_error "配置文件无写入权限"
+        return 1
     fi
 }
 
@@ -782,26 +800,71 @@ run_script_from_paste() {
 }
 
 register_binary_service() {
-    read -p "目录: " d; [[ ! -d "$d" ]] && return
-    find "$d" -maxdepth 1 -type f -executable | nl; read -p "选择: " n
-    f=$(find "$d" -maxdepth 1 -type f -executable | sed -n "${n}p")
-    [[ -z "$f" ]] && return
-    bn=$(basename "$f"); read -p "服务名 [$bn]: " sn; sn=${sn:-$bn}
+    read -p "目录: " d
+    [[ ! -d "$d" ]] && { print_error "目录不存在"; sleep 1; return; }
+    
+    local executables=$(find "$d" -maxdepth 1 -type f -executable 2>/dev/null)
+    
+    if [[ -z "$executables" ]]; then
+        print_error "目录中没有可执行文件"
+        sleep 1
+        return
+    fi
+    
+    echo "$executables" | nl
+    read -p "选择序号: " n
+    
+    local f=$(echo "$executables" | sed -n "${n}p")
+    [[ -z "$f" ]] && { print_error "无效选择"; sleep 1; return; }
+    
+    local bn=$(basename "$f")
+    read -p "服务名 [$bn]: " sn
+    sn=${sn:-$bn}
+    
     check_root
+    
     cat > "/etc/systemd/system/${sn}.service" <<EOF
 [Unit]
 Description=$sn
 After=network.target
+
 [Service]
 ExecStart=$f
 WorkingDirectory=$d
 Restart=always
+RestartSec=3
+
 [Install]
 WantedBy=multi-user.target
 EOF
-    systemctl daemon-reload && systemctl enable --now "$sn" && print_success "成功"
-    local up=$(jq ".services += [{\"name\":\"$sn\"}]" "$LOCAL_DATA")
-    echo "$up" > "$LOCAL_DATA"
+    
+    systemctl daemon-reload
+    
+    if systemctl enable --now "$sn" 2>/dev/null; then
+        print_success "服务 $sn 注册成功"
+        
+        # 确保配置文件存在
+        if [[ ! -f "$LOCAL_DATA" ]]; then
+            echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
+        fi
+        
+        # 添加到本地数据
+        local temp_file="/tmp/local_data_$RANDOM.json"
+        jq ".services += [{\"name\":\"$sn\",\"path\":\"$f\"}]" "$LOCAL_DATA" > "$temp_file" 2>/dev/null
+        
+        if [[ -s "$temp_file" ]]; then
+            mv "$temp_file" "$LOCAL_DATA"
+        else
+            rm -f "$temp_file"
+            print_warning "服务已创建，但未能保存到配置文件"
+        fi
+        
+        log_action "Registered service: $sn"
+    else
+        print_error "服务启动失败"
+        rm -f "/etc/systemd/system/${sn}.service"
+    fi
+    
     sleep 2
 }
 

@@ -51,11 +51,10 @@ NC='\033[0m'
 # 工具函数
 # ============================================================================
 
-print_success() { echo -e "${GREEN}✅ ${*}${NC}"; }
-print_error() { echo -e "${RED}❌ ${*}${NC}"; }
-print_info() { echo -e "${BLUE}ℹ️  ${*}${NC}"; }
-print_warning() { echo -e "${YELLOW}⚠️  ${*}${NC}"; }
-print_title() { echo -e "${CYAN}${MAGENTA}${*}${NC}"; }
+print_success() { echo -e "${GREEN}✓${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+print_info() { echo -e "${BLUE}ℹ${NC} $1"; }
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then

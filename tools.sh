@@ -961,12 +961,27 @@ handle_cli_args() {
 
 main() {
     if ! command -v jq &>/dev/null; then apt-get update && apt-get install -y jq; fi
+    
+    # 优先检查调用名称（在安装检查之前）
+    local name=$(basename "$0")
+    
+    # 处理快捷方式调用
+    if [[ "$name" == "tt" ]]; then
+        init_config
+        run_script_from_paste
+        exit 0
+    elif [[ "$name" == "tc" ]]; then
+        init_config
+        sync_from_cloud silent
+        sync_links_from_cloud silent
+        IS_SYNCED="true"
+        command_script_favorites
+        exit 0
+    fi
+    
+    # 正常流程：安装检查和主菜单
     check_and_install
     init_config
-    
-    local name=$(basename "$0")
-    [[ "$name" == "tt" ]] && { run_script_from_paste; exit 0; }
-    [[ "$name" == "tc" ]] && { sync_from_cloud silent; sync_links_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
     
     [[ $# -gt 0 ]] && handle_cli_args "$@"
     main_menu

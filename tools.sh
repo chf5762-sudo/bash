@@ -77,6 +77,17 @@ log_action() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_DIR/tools.log"
 }
 
+# 压缩/解压函数
+compress_content() {
+    local content="$1"
+    echo "$content" | gzip -c | base64 -w 0
+}
+
+decompress_content() {
+    local compressed="$1"
+    echo "$compressed" | base64 -d | gzip -d 2>/dev/null
+}
+
 # ============================================================================
 # 云端数据同步 (GitHub Repo)
 # ============================================================================
@@ -356,16 +367,36 @@ add_script_favorite() {
     local temp_script="/tmp/tools-script-$RANDOM.txt"
     cat > "$temp_script"
     [[ ! -s "$temp_script" ]] && { rm "$temp_script"; return; }
+    
     local content=$(cat "$temp_script")
     local lines=$(wc -l < "$temp_script")
+    local original_size=$(wc -c < "$temp_script")
+    
+    # 压缩内容
+    print_info "正在压缩脚本..."
+    local compressed=$(compress_content "$content")
+    local compressed_size=${#compressed}
+    
     sync_from_cloud silent
     local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
     local new_id=$((max_id + 1))
-    local new_obj=$(jq -n --arg id "$new_id" --arg name "$script_name" --arg content "$content" --arg lines "$lines" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), added_time: $time}')
+    
+    local new_obj=$(jq -n \
+        --arg id "$new_id" \
+        --arg name "$script_name" \
+        --arg content "$compressed" \
+        --arg lines "$lines" \
+        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{id: ($id | tonumber), name: $name, content: $content, compressed: true, lines: ($lines | tonumber), added_time: $time}')
+    
     jq ".scripts += [$new_obj]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     rm "$temp_script"
-    sync_to_cloud silent && print_success "已保存 [S$new_id]" || print_error "云端同步失败"
-    sleep 1
+    
+    local ratio=$(awk "BEGIN {printf \"%.1f\", (1 - $compressed_size / $original_size) * 100}")
+    print_success "已保存 [S$new_id] (压缩率: ${ratio}%)"
+    
+    sync_to_cloud silent || print_error "云端同步失败"
+    sleep 2
 }
 
 execute_favorite() {
@@ -388,8 +419,21 @@ execute_script_favorite() {
     local id="$1"
     local found=$(jq ".scripts[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
     if [[ -z "$found" ]]; then print_error "未找到 S$id"; sleep 1; return; fi
+    
     local name=$(echo "$found" | jq -r '.name')
     local content=$(echo "$found" | jq -r '.content')
+    local is_compressed=$(echo "$found" | jq -r '.compressed // false')
+    
+    # 如果是压缩的，先解压
+    if [[ "$is_compressed" == "true" ]]; then
+        content=$(decompress_content "$content")
+        if [[ -z "$content" ]]; then
+            print_error "脚本解压失败"
+            sleep 1
+            return
+        fi
+    fi
+    
     echo ""; print_info "执行脚本: $name"; echo ""
     read -p "参数? [留空跳过]: " params
     local temp_script="/tmp/tools-exec-$RANDOM.sh"
@@ -512,6 +556,18 @@ download_script() {
     
     local name=$(echo "$found" | jq -r '.name')
     local content=$(echo "$found" | jq -r '.content')
+    local is_compressed=$(echo "$found" | jq -r '.compressed // false')
+    
+    # 如果是压缩的，先解压
+    if [[ "$is_compressed" == "true" ]]; then
+        print_info "正在解压脚本..."
+        content=$(decompress_content "$content")
+        if [[ -z "$content" ]]; then
+            print_error "脚本解压失败"
+            sleep 1
+            return
+        fi
+    fi
     
     # 生成安全的文件名
     local safe_name=$(echo "$name" | tr ' ' '_' | tr -cd '[:alnum:]_.-')

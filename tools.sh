@@ -3,19 +3,150 @@
 
 ################################################################################
 # 文件名: tools.sh
-# 版本: v2.7.0 (GitHub Repo Edition)
+# 版本: v2.8.0 (支持常用脚本 + 固定脚本)
 # 功能: Ubuntu Server 轻量运维工具箱
-# 安装位置: /usr/local/bin/t
-#           /usr/local/bin/tt (粘贴并执行快捷方式)
-#           /usr/local/bin/tc (收藏夹快捷方式)
-# 作者: Auto Generated (Modified)
+# 新增: 脚本可标记为常用、主页显示常用脚本、固定 server_manage_services() {
+    while true; do
+        clear; echo "已注册服务:"; jq -r '.services[].name' "$LOCAL_DATA" | nl
+        echo ""; read -p "[S]启 [P]停 [R]重启 [L]日志 [0]返: " c
+        [[ $c == 0 ]] && return
+        read -p "编号: " n; name=$(jq -r ".services[$((n-1))].name" "$LOCAL_DATA")
+        case $c in
+            S|s) systemctl start "$name" ;; P|p) systemctl stop "$name" ;;
+            R|r) systemctl restart "$name" ;; L|l) journalctl -u "$name" -n 20; read -p "..." ;;
+        esac
+    done
+}
+
+cron_management() {
+    print_info "定时任务管理功能暂未实现"
+    sleep 2
+}
+
+add_caddy_route() {
+    print_info "Caddy 路由添加功能暂未实现"
+    sleep 2
+}
+
+manage_caddy_routes() {
+    print_info "Caddy 路由管理功能暂未实现"
+    sleep 2
+}
+
+configure_exit_node() {
+    print_info "Exit Node 配置功能暂未实现"
+    sleep 2
+}
+
+change_timezone() {
+    print_info "时区设置功能暂未实现"
+    sleep 2
+}
+
+enable_root_ssh() {
+    print_info "Root SSH 启用功能暂未实现"
+    sleep 2
+}
+
+install_docker_compose() {
+    if ! command -v docker &>/dev/null; then curl -fsSL https://get.docker.com | sh; fi
+    apt-get install -y docker-compose-plugin
+    print_success "Docker 安装完成"; sleep 2
+}
+
+docker_container_management() {
+    while true; do
+        clear; docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}" | nl
+        echo ""; read -p "[S]启 [P]停 [R]重启 [D]删 [L]日志 [E]进 [0]返: " c
+        [[ $c == 0 ]] && return
+        read -p "行号(非ID): " n; id=$(docker ps -a --format "{{.ID}}" | sed -n "$((n-1))p")
+        [[ -z "$id" ]] && continue
+        case $c in
+            S|s) docker start "$id" ;; P|p) docker stop "$id" ;; R|r) docker restart "$id" ;;
+            D|d) docker rm -f "$id" ;; L|l) docker logs --tail 20 "$id"; read -p "..." ;;
+            E|e) docker exec -it "$id" sh ;;
+        esac
+    done
+}
+
+install_caddy() {
+    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update && apt-get install -y caddy
+    print_success "Caddy 安装完成"; sleep 2
+}
+
+install_tailscale() { 
+    curl -fsSL https://tailscale.com/install.sh | sh
+    print_success "Tailscale 安装完成"; sleep 2
+}
+
+install_1panel() { 
+    curl -sSL https://resource.fit2cloud.com/1panel/package/quick_start.sh | bash
+}
+
+update_script() {
+    local t="/tmp/update.sh"
+    if curl -fsSL -o "$t" "$GITHUB_RAW_URL"; then
+        chmod +x "$t"; mv "$t" "$INSTALL_PATH"
+        ln -sf "$INSTALL_PATH" "$LINK_TT"; ln -sf "$INSTALL_PATH" "$LINK_TC"
+        print_success "更新完成，正在重启..."; sleep 1; exec "$INSTALL_PATH"
+    else
+        print_error "下载失败"; sleep 2
+    fi
+}
+
+check_and_install() {
+    if [[ "$SCRIPT_PATH" != "$INSTALL_PATH" ]]; then
+        cp "$SCRIPT_PATH" "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
+        ln -sf "$INSTALL_PATH" "$LINK_TT" && ln -sf "$INSTALL_PATH" "$LINK_TC"
+        init_config
+        print_success "安装成功! 使用 't' 启动。"
+        exit 0
+    fi
+}
+
+handle_cli_args() {
+    case "$1" in
+        --help|-h) echo "Usage: t [C1|S1|M] | tt | tc"; exit 0 ;;
+        [Tt][Tt]) run_script_from_paste; exit 0 ;;
+        [Mm]) init_config; run_fixed_script; exit 0 ;;
+        [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
+        [Cc][0-9]*|[Ss][0-9]*)
+            init_config
+            sync_from_cloud silent 
+            execute_direct_by_string "$1"
+            exit 0
+            ;;
+    esac
+}
+
+# ============================================================================
+# 主入口
+# ============================================================================
+
+main() {
+    if ! command -v jq &>/dev/null; then apt-get update && apt-get install -y jq; fi
+    check_and_install
+    init_config
+    
+    local name=$(basename "$0")
+    [[ "$name" == "tt" ]] && { run_script_from_paste; exit 0; }
+    [[ "$name" == "tc" ]] && { sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
+    
+    [[ $# -gt 0 ]] && handle_cli_args "$@"
+    main_menu
+}
+
+main "$@"r
 # 日期: 2025-12-16
 ################################################################################
 
 # ============================================================================
 # 全局变量
 # ============================================================================
-VERSION="2.7.0"
+VERSION="2.8.0"
 SCRIPT_PATH="$(readlink -f "$0")"
 INSTALL_PATH="/usr/local/bin/t"
 LINK_TT="/usr/local/bin/tt"
@@ -25,6 +156,10 @@ LOG_DIR="/var/log/tools"
 LOCAL_DATA="$CONFIG_DIR/local.json"
 CACHE_FILE="$CONFIG_DIR/cloud_cache.json"
 IS_SYNCED="false"
+
+# 固定脚本配置
+FIXED_SCRIPT_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/server_manager"
+FIXED_SCRIPT_NAME="Server Manager"
 
 # GitHub Repo 配置（Token 分段拼接）
 TOKEN_P1="ghp_9L6XhJxk"
@@ -189,17 +324,27 @@ main_menu() {
         cat <<'EOF'
 
  ▸ 快捷操作
-   [T/tt] 📝 粘贴并执行    [C/tc] 💾 收藏夹
+   [T/tt] 📝 粘贴并执行    [C/tc] 💾 收藏夹    [M] 🔧 Server Manager
 
 EOF
         # 显示常用命令（最多3个）
-        local fav_count=$(jq -r '[.commands[] | select(.favorite == true)] | length' "$CACHE_FILE" 2>/dev/null)
-        if [[ "$fav_count" -gt 0 ]]; then
-            echo " ▸ 常用命令 (⭐ 来自收藏夹)"
+        local fav_cmd_count=$(jq -r '[.commands[] | select(.favorite == true)] | length' "$CACHE_FILE" 2>/dev/null)
+        if [[ "$fav_cmd_count" -gt 0 ]]; then
+            echo " ▸ 常用命令 ⭐"
             jq -r '.commands[] | select(.favorite == true) | "\(.id)|\(.command)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id cmd; do
                 local display_cmd="${cmd:0:50}"
                 [[ ${#cmd} -gt 50 ]] && display_cmd="${display_cmd}..."
                 echo "   [C$id] $display_cmd"
+            done
+            echo ""
+        fi
+        
+        # 显示常用脚本（最多3个）
+        local fav_script_count=$(jq -r '[.scripts[] | select(.favorite == true)] | length' "$CACHE_FILE" 2>/dev/null)
+        if [[ "$fav_script_count" -gt 0 ]]; then
+            echo " ▸ 常用脚本 ⭐"
+            jq -r '.scripts[] | select(.favorite == true) | "\(.id)|\(.name)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id name; do
+                echo "   [S$id] $name"
             done
             echo ""
         fi
@@ -215,7 +360,7 @@ EOF
    [11] 1Panel     [13] Root SSH  [0] 退出
 ════════════════════════════════════════════════════════════
 EOF
-        read -p "请选择 (支持 tt, tc, C1): " choice
+        read -p "请选择 (支持 tt, tc, M, C1, S1): " choice
         local raw_choice="$choice"
         choice=$(echo "$choice" | tr '[:lower:]' '[:upper:]')
         
@@ -226,6 +371,7 @@ EOF
         fi
         
         case $choice in
+            M) run_fixed_script ;;
             T|TT) run_script_from_paste ;;
             C|TC) command_script_favorites ;;
             1) register_binary_service ;;
@@ -246,6 +392,7 @@ EOF
             *) 
                 if [[ "$raw_choice" == "tt" ]]; then run_script_from_paste
                 elif [[ "$raw_choice" == "tc" ]]; then command_script_favorites
+                elif [[ "$raw_choice" == "m" ]]; then run_fixed_script
                 else print_error "无效选择"; sleep 0.5; fi
                 ;;
         esac
@@ -253,7 +400,37 @@ EOF
 }
 
 # ============================================================================
-# [C] 收藏夹 (GitHub Repo 版)
+# 固定脚本执行
+# ============================================================================
+
+run_fixed_script() {
+    clear
+    print_info "正在下载并执行 $FIXED_SCRIPT_NAME..."
+    echo ""
+    
+    local temp_script="/tmp/server_manager_$RANDOM.sh"
+    
+    if curl -fsSL -o "$temp_script" "$FIXED_SCRIPT_URL"; then
+        chmod +x "$temp_script"
+        print_success "下载成功"
+        echo ""
+        read -p "参数? [留空跳过]: " params
+        echo ""
+        echo "════════════════════════════════════════════════════════════"
+        bash "$temp_script" $params
+        echo "════════════════════════════════════════════════════════════"
+        rm -f "$temp_script"
+        log_action "Executed fixed script: $FIXED_SCRIPT_NAME"
+    else
+        print_error "下载失败，请检查网络连接"
+    fi
+    
+    echo ""
+    read -p "按回车继续..."
+}
+
+# ============================================================================
+# [C] 收藏夹 (GitHub Repo 版 - 支持脚本常用标记)
 # ============================================================================
 
 command_script_favorites() {
@@ -283,12 +460,14 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本 (仅一次 jq 调用)
-            local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
+            # 批量渲染脚本 (仅一次 jq 调用) - 支持常用标记
+            local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)|\(.favorite // false)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$script_list" ]]; then
                 echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
-                while IFS='|' read -r id name lines; do
-                    echo "[S$id] $name (${lines}行)"
+                while IFS='|' read -r id name lines fav; do
+                    local star=""
+                    [[ "$fav" == "true" ]] && star="⭐ "
+                    echo "[S$id] $star$name (${lines}行)"
                 done <<< "$script_list"
                 echo ""
             fi
@@ -298,7 +477,7 @@ command_script_favorites() {
         echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
         echo "[7] 💾 下载脚本  [R] 🔄 刷新     [0] 返回"
         echo ""
-        read -p "请选择 (支持 tt, C1): " choice
+        read -p "请选择 (支持 tt, C1, S1): " choice
         
         # 菜单内直接支持 C1/S1
         if [[ "$choice" =~ ^[Cc][0-9]+$ ]] || [[ "$choice" =~ ^[Ss][0-9]+$ ]]; then
@@ -361,7 +540,7 @@ add_script_favorite() {
     sync_from_cloud silent
     local max_id=$(jq '[.scripts[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
     local new_id=$((max_id + 1))
-    local new_obj=$(jq -n --arg id "$new_id" --arg name "$script_name" --arg content "$content" --arg lines "$lines" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), added_time: $time}')
+    local new_obj=$(jq -n --arg id "$new_id" --arg name "$script_name" --arg content "$content" --arg lines "$lines" --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{id: ($id | tonumber), name: $name, content: $content, lines: ($lines | tonumber), favorite: false, added_time: $time}')
     jq ".scripts += [$new_obj]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     rm "$temp_script"
     sync_to_cloud silent && print_success "已保存 [S$new_id]" || print_error "云端同步失败"
@@ -431,10 +610,10 @@ reorder_favorites() {
     # 使用临时文件逐步处理，避免 jq 内存问题
     local temp_file="/tmp/reorder-$RANDOM.json"
     
-    # 重排命令 ID
+    # 重排命令 ID (保留 favorite 字段)
     jq '.commands | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.commands"
     
-    # 重排脚本 ID
+    # 重排脚本 ID (保留 favorite 字段)
     jq '.scripts | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.scripts"
     
     # 合并结果
@@ -452,23 +631,30 @@ reorder_favorites() {
 
 toggle_favorite() {
     echo ""
-    read -p "输入编号 (如 C1): " input
+    read -p "输入编号 (如 C1, S1): " input
     local type="${input:0:1}"
     local id="${input:1}"
-    
-    if [[ "${type^^}" != "C" ]]; then
-        print_error "仅支持命令收藏 (C1, C2...)"
-        sleep 1
-        return
-    fi
     
     [[ ! "$id" =~ ^[0-9]+$ ]] && return
     sync_from_cloud silent
     
-    local current_fav=$(jq -r ".commands[] | select(.id == $id) | .favorite // false" "$CACHE_FILE" 2>/dev/null)
+    local current_fav=""
+    local item_type=""
+    
+    if [[ "${type^^}" == "C" ]]; then
+        current_fav=$(jq -r ".commands[] | select(.id == $id) | .favorite // false" "$CACHE_FILE" 2>/dev/null)
+        item_type="命令"
+    elif [[ "${type^^}" == "S" ]]; then
+        current_fav=$(jq -r ".scripts[] | select(.id == $id) | .favorite // false" "$CACHE_FILE" 2>/dev/null)
+        item_type="脚本"
+    else
+        print_error "仅支持 C1 (命令) 或 S1 (脚本)"
+        sleep 1
+        return
+    fi
     
     if [[ -z "$current_fav" ]]; then
-        print_error "未找到 C$id"
+        print_error "未找到 $input"
         sleep 1
         return
     fi
@@ -476,15 +662,19 @@ toggle_favorite() {
     local new_fav="true"
     [[ "$current_fav" == "true" ]] && new_fav="false"
     
-    jq "(.commands[] | select(.id == $id) | .favorite) = $new_fav" "$CACHE_FILE" > "$CACHE_FILE.tmp" && \
-        mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+    if [[ "${type^^}" == "C" ]]; then
+        jq "(.commands[] | select(.id == $id) | .favorite) = $new_fav" "$CACHE_FILE" > "$CACHE_FILE.tmp"
+    else
+        jq "(.scripts[] | select(.id == $id) | .favorite) = $new_fav" "$CACHE_FILE" > "$CACHE_FILE.tmp"
+    fi
     
+    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     sync_to_cloud silent
     
     if [[ "$new_fav" == "true" ]]; then
-        print_success "C$id 已设为常用 ⭐"
+        print_success "$input ($item_type) 已设为常用 ⭐"
     else
-        print_success "C$id 已取消常用"
+        print_success "$input ($item_type) 已取消常用"
     fi
     sleep 1
 }
@@ -573,137 +763,4 @@ EOF
     sleep 2
 }
 
-manage_services() {
-    while true; do
-        clear; echo "已注册服务:"; jq -r '.services[].name' "$LOCAL_DATA" | nl
-        echo ""; read -p "[S]启 [P]停 [R]重启 [L]日志 [0]返: " c
-        [[ $c == 0 ]] && return
-        read -p "编号: " n; name=$(jq -r ".services[$((n-1))].name" "$LOCAL_DATA")
-        case $c in
-            S|s) systemctl start "$name" ;; P|p) systemctl stop "$name" ;;
-            R|r) systemctl restart "$name" ;; L|l) journalctl -u "$name" -n 20; read -p "..." ;;
-        esac
-    done
-}
-
-cron_management() {
-    print_info "定时任务管理功能暂未实现"
-    sleep 2
-}
-
-add_caddy_route() {
-    print_info "Caddy 路由添加功能暂未实现"
-    sleep 2
-}
-
-manage_caddy_routes() {
-    print_info "Caddy 路由管理功能暂未实现"
-    sleep 2
-}
-
-configure_exit_node() {
-    print_info "Exit Node 配置功能暂未实现"
-    sleep 2
-}
-
-change_timezone() {
-    print_info "时区设置功能暂未实现"
-    sleep 2
-}
-
-enable_root_ssh() {
-    print_info "Root SSH 启用功能暂未实现"
-    sleep 2
-}
-
-install_docker_compose() {
-    if ! command -v docker &>/dev/null; then curl -fsSL https://get.docker.com | sh; fi
-    apt-get install -y docker-compose-plugin
-    print_success "Docker 安装完成"; sleep 2
-}
-
-docker_container_management() {
-    while true; do
-        clear; docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}" | nl
-        echo ""; read -p "[S]启 [P]停 [R]重启 [D]删 [L]日志 [E]进 [0]返: " c
-        [[ $c == 0 ]] && return
-        read -p "行号(非ID): " n; id=$(docker ps -a --format "{{.ID}}" | sed -n "$((n-1))p")
-        [[ -z "$id" ]] && continue
-        case $c in
-            S|s) docker start "$id" ;; P|p) docker stop "$id" ;; R|r) docker restart "$id" ;;
-            D|d) docker rm -f "$id" ;; L|l) docker logs --tail 20 "$id"; read -p "..." ;;
-            E|e) docker exec -it "$id" sh ;;
-        esac
-    done
-}
-
-install_caddy() {
-    apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update && apt-get install -y caddy
-    print_success "Caddy 安装完成"; sleep 2
-}
-
-install_tailscale() { 
-    curl -fsSL https://tailscale.com/install.sh | sh
-    print_success "Tailscale 安装完成"; sleep 2
-}
-
-install_1panel() { 
-    curl -sSL https://resource.fit2cloud.com/1panel/package/quick_start.sh | bash
-}
-
-update_script() {
-    local t="/tmp/update.sh"
-    if curl -fsSL -o "$t" "$GITHUB_RAW_URL"; then
-        chmod +x "$t"; mv "$t" "$INSTALL_PATH"
-        ln -sf "$INSTALL_PATH" "$LINK_TT"; ln -sf "$INSTALL_PATH" "$LINK_TC"
-        print_success "更新完成，正在重启..."; sleep 1; exec "$INSTALL_PATH"
-    else
-        print_error "下载失败"; sleep 2
-    fi
-}
-
-check_and_install() {
-    if [[ "$SCRIPT_PATH" != "$INSTALL_PATH" ]]; then
-        cp "$SCRIPT_PATH" "$INSTALL_PATH" && chmod +x "$INSTALL_PATH"
-        ln -sf "$INSTALL_PATH" "$LINK_TT" && ln -sf "$INSTALL_PATH" "$LINK_TC"
-        init_config
-        print_success "安装成功! 使用 't' 启动。"
-        exit 0
-    fi
-}
-
-handle_cli_args() {
-    case "$1" in
-        --help|-h) echo "Usage: t [C1|S1] | tt | tc"; exit 0 ;;
-        [Tt][Tt]) run_script_from_paste; exit 0 ;;
-        [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
-        [Cc][0-9]*|[Ss][0-9]*)
-            init_config
-            sync_from_cloud silent 
-            execute_direct_by_string "$1"
-            exit 0
-            ;;
-    esac
-}
-
-# ============================================================================
-# 主入口
-# ============================================================================
-
-main() {
-    if ! command -v jq &>/dev/null; then apt-get update && apt-get install -y jq; fi
-    check_and_install
-    init_config
-    
-    local name=$(basename "$0")
-    [[ "$name" == "tt" ]] && { run_script_from_paste; exit 0; }
-    [[ "$name" == "tc" ]] && { sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
-    
-    [[ $# -gt 0 ]] && handle_cli_args "$@"
-    main_menu
-}
-
-main "$@"
+manage

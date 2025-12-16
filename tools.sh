@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # curl -fsSL https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh -o tools.sh && chmod +x tools.sh && sudo ./tools.sh
 
@@ -33,11 +34,9 @@ TOKEN_P3="nwSVJtqbNWYH4FgpIN"
 GH_TOKEN="${TOKEN_P1}${TOKEN_P2}${TOKEN_P3}"
 GH_OWNER="chf5762-sudo"
 GH_REPO="bash"
+GH_FILE="tools.json"
 GH_BRANCH="main"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh"
-
-# 当前使用的数据文件（可切换）
-CURRENT_FILE="tools.json"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -85,9 +84,9 @@ log_action() {
 
 sync_from_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在从云端同步 ($CURRENT_FILE)..."
+    [[ "$silent" != "silent" ]] && print_info "正在从云端同步..."
     
-    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$CURRENT_FILE?ref=$GH_BRANCH"
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
     local response=$(curl -s -H "Authorization: token $GH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "$api_url" 2>/dev/null)
@@ -100,7 +99,7 @@ sync_from_cloud() {
     local content=$(echo "$response" | jq -r '.content' 2>/dev/null)
     
     if [[ -z "$content" || "$content" == "null" ]]; then
-        [[ "$silent" != "silent" ]] && print_warning "云端文件不存在，将自动创建"
+        [[ "$silent" != "silent" ]] && print_warning "云端数据为空，初始化中..."
         init_cloud_data
         return 1
     fi
@@ -112,41 +111,35 @@ sync_from_cloud() {
 
 sync_to_cloud() {
     local silent="$1"
-    [[ "$silent" != "silent" ]] && print_info "正在推送到云端 ($CURRENT_FILE)..."
+    [[ "$silent" != "silent" ]] && print_info "正在推送到云端..."
     
     if [[ ! -f "$CACHE_FILE" ]]; then
         print_error "本地缓存不存在"
         return 1
     fi
     
-    # 先获取当前文件的 SHA（如果文件不存在，SHA 为空也没关系）
-    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$CURRENT_FILE?ref=$GH_BRANCH"
+    # 先获取当前文件的 SHA
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_FILE?ref=$GH_BRANCH"
     local file_info=$(curl -s -H "Authorization: token $GH_TOKEN" \
         -H "Accept: application/vnd.github.v3+json" \
         "$api_url" 2>/dev/null)
     
     local current_sha=$(echo "$file_info" | jq -r '.sha' 2>/dev/null)
     
-    local content_base64=$(base64 -w 0 "$CACHE_FILE")
-    local commit_msg="Update $CURRENT_FILE via client v$VERSION ($(date +%Y-%m-%d))"
-    
-    local payload
     if [[ -z "$current_sha" || "$current_sha" == "null" ]]; then
-        # 文件不存在，创建新文件（不需要 SHA）
-        payload=$(jq -n \
-            --arg msg "$commit_msg" \
-            --arg content "$content_base64" \
-            --arg branch "$GH_BRANCH" \
-            '{message: $msg, content: $content, branch: $branch}')
-    else
-        # 文件存在，更新文件（需要 SHA）
-        payload=$(jq -n \
-            --arg msg "$commit_msg" \
-            --arg content "$content_base64" \
-            --arg sha "$current_sha" \
-            --arg branch "$GH_BRANCH" \
-            '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+        [[ "$silent" != "silent" ]] && print_error "获取文件 SHA 失败"
+        return 1
     fi
+    
+    local content_base64=$(base64 -w 0 "$CACHE_FILE")
+    local commit_msg="Update tools.json via client v$VERSION ($(date +%Y-%m-%d))"
+    
+    local payload=$(jq -n \
+        --arg msg "$commit_msg" \
+        --arg content "$content_base64" \
+        --arg sha "$current_sha" \
+        --arg branch "$GH_BRANCH" \
+        '{message: $msg, content: $content, sha: $sha, branch: $branch}')
     
     local response=$(curl -s -X PUT \
         -H "Authorization: token $GH_TOKEN" \
@@ -156,10 +149,10 @@ sync_to_cloud() {
     
     if echo "$response" | grep -q '"content":'; then
         [[ "$silent" != "silent" ]] && print_success "推送完成"
-        log_action "Synced to cloud ($CURRENT_FILE)"
+        log_action "Synced to cloud (GitHub Repo)"
         return 0
     else
-        [[ "$silent" != "silent" ]] && print_error "推送失败: $(echo "$response" | jq -r '.message // "Unknown error"')"
+        [[ "$silent" != "silent" ]] && print_error "推送失败"
         return 1
     fi
 }
@@ -268,7 +261,7 @@ command_script_favorites() {
     while true; do
         clear
         echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    命令、脚本收藏夹（云端：$CURRENT_FILE）                ║"
+        echo "║    命令、脚本收藏夹（云端：GitHub Repo）                  ║"
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -279,7 +272,7 @@ command_script_favorites() {
         if [[ "$has_data" == "0" || -z "$has_data" ]]; then
             print_warning "暂无数据 (按 R 刷新)"
         else
-            # 批量渲染命令
+            # 批量渲染命令 (仅一次 jq 调用)
             local cmd_list=$(jq -r '.commands[] | "\(.id)|\(.command)|\(.favorite // false)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$cmd_list" ]]; then
                 echo -e "${CYAN}═══ 命令收藏 ═══${NC}"
@@ -291,7 +284,7 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本
+            # 批量渲染脚本 (仅一次 jq 调用)
             local script_list=$(jq -r '.scripts[] | "\(.id)|\(.name)|\(.lines)"' "$CACHE_FILE" 2>/dev/null)
             if [[ -n "$script_list" ]]; then
                 echo -e "${MAGENTA}═══ 脚本收藏 ═══${NC}"
@@ -304,8 +297,7 @@ command_script_favorites() {
         
         echo "[1] 添加命令    [2] 添加脚本    [3] 执行收藏"
         echo "[4] 删除收藏    [5] 🔢 重排编号 [6] ⭐ 设为常用"
-        echo "[7] 💾 下载脚本  [8] 📁 切换文件  [R] 🔄 刷新"
-        echo "[0] 返回"
+        echo "[7] 💾 下载脚本  [R] 🔄 刷新     [0] 返回"
         echo ""
         read -p "请选择 (支持 tt, C1): " choice
         
@@ -324,7 +316,6 @@ command_script_favorites() {
             5) reorder_favorites ;;
             6) toggle_favorite ;;
             7) download_script ;;
-            8) switch_data_file ;;
             [Rr]) 
                 sync_from_cloud 
                 IS_SYNCED="true"
@@ -542,44 +533,6 @@ download_script() {
     
     echo ""
     read -p "按回车继续..."
-}
-
-switch_data_file() {
-    clear
-    echo "╔════════════════════════════════════════════════════════════╗"
-    echo "║    切换数据文件                                            ║"
-    echo "╚════════════════════════════════════════════════════════════╝"
-    echo ""
-    echo "当前文件: ${CYAN}$CURRENT_FILE${NC}"
-    echo ""
-    echo "常用文件:"
-    echo "  tools.json, tools-1.json, tools-2.json, ..."
-    echo ""
-    read -p "输入文件名 [如: tools-1.json]: " new_file
-    
-    if [[ -z "$new_file" ]]; then
-        print_warning "未输入文件名"
-        sleep 1
-        return
-    fi
-    
-    # 确保文件名以 .json 结尾
-    [[ ! "$new_file" =~ \.json$ ]] && new_file="${new_file}.json"
-    
-    CURRENT_FILE="$new_file"
-    
-    print_info "切换到: $CURRENT_FILE"
-    print_info "正在同步..."
-    
-    if sync_from_cloud; then
-        print_success "切换成功"
-        log_action "Switched to $CURRENT_FILE"
-    else
-        print_warning "文件不存在，将自动创建"
-        init_cloud_data
-    fi
-    
-    sleep 2
 }
 
 # ============================================================================

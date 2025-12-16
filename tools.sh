@@ -25,6 +25,7 @@ CONFIG_DIR="/etc/tools"
 LOG_DIR="/var/log/tools"
 LOCAL_DATA="$CONFIG_DIR/local.json"
 CACHE_FILE="$CONFIG_DIR/cloud_cache.json"
+LINK_CACHE="$CONFIG_DIR/links_cache.txt"
 IS_SYNCED="false"
 
 # GitHub Repo 配置（Token 分段拼接）
@@ -36,7 +37,9 @@ GH_OWNER="chf5762-sudo"
 GH_REPO="bash"
 GH_FILE="tools.json"
 GH_BRANCH="main"
+GH_LINK_FILE="bash-link.txt"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/tools.sh"
+GITHUB_LINK_RAW="https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/bash-link.txt"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -70,7 +73,10 @@ init_config() {
         echo '{"services": [], "caddy_routes": []}' > "$LOCAL_DATA"
     fi
     if [[ ! -f "$CACHE_FILE" ]]; then
-        echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"
+        echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
+    fi
+    if [[ ! -f "$LINK_CACHE" ]]; then
+        touch "$LINK_CACHE"
     fi
 }
 
@@ -158,8 +164,88 @@ sync_to_cloud() {
 }
 
 init_cloud_data() {
-    echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"
+    echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"
     sync_to_cloud silent
+}
+
+# ============================================================================
+# 脚本链接同步 (bash-link.txt)
+# ============================================================================
+
+sync_links_from_cloud() {
+    local silent="$1"
+    [[ "$silent" != "silent" ]] && print_info "正在同步脚本链接..."
+    
+    if curl -fsSL -o "$LINK_CACHE" "$GITHUB_LINK_RAW" 2>/dev/null; then
+        [[ "$silent" != "silent" ]] && print_success "链接同步完成"
+        return 0
+    else
+        [[ "$silent" != "silent" ]] && print_error "链接同步失败"
+        return 1
+    fi
+}
+
+sync_links_to_cloud() {
+    local silent="$1"
+    [[ "$silent" != "silent" ]] && print_info "正在推送链接到云端..."
+    
+    if [[ ! -f "$LINK_CACHE" ]]; then
+        print_error "本地链接缓存不存在"
+        return 1
+    fi
+    
+    local api_url="https://api.github.com/repos/$GH_OWNER/$GH_REPO/contents/$GH_LINK_FILE?ref=$GH_BRANCH"
+    
+    # 获取当前文件的 SHA
+    local file_info=$(curl -s -H "Authorization: token $GH_TOKEN" \
+        -H "Accept: application/vnd.github.v3+json" \
+        "$api_url" 2>/dev/null)
+    
+    local current_sha=$(echo "$file_info" | jq -r '.sha' 2>/dev/null)
+    
+    # 如果文件不存在（首次创建）
+    if [[ -z "$current_sha" || "$current_sha" == "null" ]]; then
+        local content_base64=$(base64 -w 0 "$LINK_CACHE")
+        local commit_msg="Create bash-link.txt via client v$VERSION"
+        
+        local payload=$(jq -n \
+            --arg msg "$commit_msg" \
+            --arg content "$content_base64" \
+            --arg branch "$GH_BRANCH" \
+            '{message: $msg, content: $content, branch: $branch}')
+        
+        local response=$(curl -s -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "$payload" \
+            "$api_url" 2>/dev/null)
+    else
+        # 文件已存在，更新
+        local content_base64=$(base64 -w 0 "$LINK_CACHE")
+        local commit_msg="Update bash-link.txt via client v$VERSION ($(date +%Y-%m-%d))"
+        
+        local payload=$(jq -n \
+            --arg msg "$commit_msg" \
+            --arg content "$content_base64" \
+            --arg sha "$current_sha" \
+            --arg branch "$GH_BRANCH" \
+            '{message: $msg, content: $content, sha: $sha, branch: $branch}')
+        
+        local response=$(curl -s -X PUT \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            -d "$payload" \
+            "$api_url" 2>/dev/null)
+    fi
+    
+    if echo "$response" | grep -q '"content":'; then
+        [[ "$silent" != "silent" ]] && print_success "链接推送完成"
+        log_action "Synced links to cloud (bash-link.txt)"
+        return 0
+    else
+        [[ "$silent" != "silent" ]] && print_error "链接推送失败"
+        return 1
+    fi
 }
 
 # ============================================================================
@@ -182,6 +268,7 @@ main_menu() {
     # 仅首次进入时自动同步
     if [[ "$IS_SYNCED" == "false" ]]; then
         sync_from_cloud silent
+        sync_links_from_cloud silent
         IS_SYNCED="true"
     fi
     
@@ -206,13 +293,16 @@ EOF
         fi
         
         # 显示脚本链接（最多3个）
-        local link_count=$(jq -r '.links | length' "$CACHE_FILE" 2>/dev/null)
-        if [[ "$link_count" -gt 0 ]]; then
-            echo " ▸ 快速脚本 (🔗 一键执行)"
-            jq -r '.links[] | "\(.id)|\(.name)"' "$CACHE_FILE" 2>/dev/null | head -3 | while IFS='|' read -r id name; do
-                echo "   [L$id] $name"
-            done
-            echo ""
+        if [[ -f "$LINK_CACHE" && -s "$LINK_CACHE" ]]; then
+            local link_count=$(grep -c "^" "$LINK_CACHE" 2>/dev/null || echo "0")
+            if [[ "$link_count" -gt 0 ]]; then
+                echo " ▸ 快速脚本 (🔗 一键执行)"
+                head -3 "$LINK_CACHE" | nl -v 1 | while read -r id line; do
+                    local name=$(echo "$line" | cut -d'|' -f1)
+                    echo "   [L$id] $name"
+                done
+                echo ""
+            fi
         fi
         
         cat <<'EOF'
@@ -275,11 +365,13 @@ command_script_favorites() {
         echo "╚════════════════════════════════════════════════════════════╝"
         echo ""
         
-        if [[ ! -f "$CACHE_FILE" ]]; then echo '{"commands": [], "scripts": [], "links": []}' > "$CACHE_FILE"; fi
+        if [[ ! -f "$CACHE_FILE" ]]; then echo '{"commands": [], "scripts": []}' > "$CACHE_FILE"; fi
 
-        local has_data=$(jq -r '(.commands | length) + (.scripts | length) + (.links | length)' "$CACHE_FILE" 2>/dev/null)
+        local has_cmd=$(jq -r '(.commands | length) + (.scripts | length)' "$CACHE_FILE" 2>/dev/null)
+        local has_link=0
+        [[ -f "$LINK_CACHE" && -s "$LINK_CACHE" ]] && has_link=$(grep -c "^" "$LINK_CACHE" 2>/dev/null || echo "0")
         
-        if [[ "$has_data" == "0" || -z "$has_data" ]]; then
+        if [[ "$has_cmd" == "0" && "$has_link" == "0" ]] || [[ -z "$has_cmd" ]]; then
             print_warning "暂无数据 (按 R 刷新)"
         else
             # 批量渲染命令
@@ -304,16 +396,17 @@ command_script_favorites() {
                 echo ""
             fi
             
-            # 批量渲染脚本链接
-            local link_list=$(jq -r '.links[] | "\(.id)|\(.name)|\(.url)"' "$CACHE_FILE" 2>/dev/null)
-            if [[ -n "$link_list" ]]; then
+            # 批量渲染脚本链接（从 txt 文件）
+            if [[ -f "$LINK_CACHE" && -s "$LINK_CACHE" ]]; then
                 echo -e "${GREEN}═══ 脚本链接 ═══${NC}"
-                while IFS='|' read -r id name url; do
+                nl -v 1 "$LINK_CACHE" | while read -r id line; do
+                    local name=$(echo "$line" | cut -d'|' -f1)
+                    local url=$(echo "$line" | cut -d'|' -f2)
                     local display_url="${url:0:45}"
                     [[ ${#url} -gt 45 ]] && display_url="${display_url}..."
                     echo "[L$id] $name"
                     echo "      🔗 $display_url"
-                done <<< "$link_list"
+                done
                 echo ""
             fi
         fi
@@ -343,7 +436,8 @@ command_script_favorites() {
             8) add_link_favorite ;;
             9) show_link_detail ;;
             [Rr]) 
-                sync_from_cloud 
+                sync_from_cloud
+                sync_links_from_cloud
                 IS_SYNCED="true"
                 ;;
             0) return ;;
@@ -411,20 +505,12 @@ add_link_favorite() {
         return
     fi
     
-    sync_from_cloud silent
-    local max_id=$(jq '[.links[].id] | max // 0' "$CACHE_FILE" 2>/dev/null)
-    local new_id=$((max_id + 1))
+    sync_links_from_cloud silent
     
-    local new_link=$(jq -n \
-        --arg id "$new_id" \
-        --arg name "$link_name" \
-        --arg url "$link_url" \
-        --arg time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        '{id: ($id | tonumber), name: $name, url: $url, added_time: $time}')
+    # 追加到文件末尾，格式：名称|URL
+    echo "${link_name}|${link_url}" >> "$LINK_CACHE"
     
-    jq ".links += [$new_link]" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
-    
-    sync_to_cloud silent && print_success "已保存 [L$new_id]" || print_error "云端同步失败"
+    sync_links_to_cloud silent && print_success "已保存链接" || print_error "云端同步失败"
     sleep 1
 }
 
@@ -442,16 +528,22 @@ show_link_detail() {
     
     [[ ! "$id" =~ ^[0-9]+$ ]] && return
     
-    local found=$(jq ".links[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
-    if [[ -z "$found" ]]; then
+    if [[ ! -f "$LINK_CACHE" || ! -s "$LINK_CACHE" ]]; then
+        print_error "链接列表为空"
+        sleep 1
+        return
+    fi
+    
+    local line=$(sed -n "${id}p" "$LINK_CACHE" 2>/dev/null)
+    
+    if [[ -z "$line" ]]; then
         print_error "未找到 L$id"
         sleep 1
         return
     fi
     
-    local name=$(echo "$found" | jq -r '.name')
-    local url=$(echo "$found" | jq -r '.url')
-    local added_time=$(echo "$found" | jq -r '.added_time')
+    local name=$(echo "$line" | cut -d'|' -f1)
+    local url=$(echo "$line" | cut -d'|' -f2)
     
     clear
     echo "╔════════════════════════════════════════════════════════════╗"
@@ -460,7 +552,6 @@ show_link_detail() {
     echo ""
     echo "名称: $name"
     echo "URL:  $url"
-    echo "添加时间: $added_time"
     echo ""
     read -p "按回车继续..."
 }
@@ -500,16 +591,23 @@ execute_script_favorite() {
 
 execute_link_favorite() {
     local id="$1"
-    local found=$(jq ".links[] | select(.id == $id)" "$CACHE_FILE" 2>/dev/null)
     
-    if [[ -z "$found" ]]; then
+    if [[ ! -f "$LINK_CACHE" || ! -s "$LINK_CACHE" ]]; then
+        print_error "链接列表为空"
+        sleep 1
+        return
+    fi
+    
+    local line=$(sed -n "${id}p" "$LINK_CACHE" 2>/dev/null)
+    
+    if [[ -z "$line" ]]; then
         print_error "未找到 L$id"
         sleep 1
         return
     fi
     
-    local name=$(echo "$found" | jq -r '.name')
-    local url=$(echo "$found" | jq -r '.url')
+    local name=$(echo "$line" | cut -d'|' -f1)
+    local url=$(echo "$line" | cut -d'|' -f2)
     
     echo ""
     print_info "脚本: $name"
@@ -545,17 +643,28 @@ delete_favorite() {
     local type="${input:0:1}"
     local id="${input:1}"
     [[ ! "$id" =~ ^[0-9]+$ ]] && return
-    sync_from_cloud silent
     
     case "${type^^}" in
         C)
+            sync_from_cloud silent
             jq "del(.commands[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            sync_to_cloud silent && print_success "删除成功" || print_error "同步失败"
             ;;
         S)
+            sync_from_cloud silent
             jq "del(.scripts[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            sync_to_cloud silent && print_success "删除成功" || print_error "同步失败"
             ;;
         L)
-            jq "del(.links[] | select(.id == $id))" "$CACHE_FILE" > "$CACHE_FILE.tmp" && mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+            sync_links_from_cloud silent
+            if [[ ! -f "$LINK_CACHE" || ! -s "$LINK_CACHE" ]]; then
+                print_error "链接列表为空"
+                sleep 1
+                return
+            fi
+            # 删除指定行
+            sed -i "${id}d" "$LINK_CACHE"
+            sync_links_to_cloud silent && print_success "删除成功" || print_error "同步失败"
             ;;
         *)
             print_error "无效类型"
@@ -564,7 +673,6 @@ delete_favorite() {
             ;;
     esac
     
-    sync_to_cloud silent && print_success "删除成功" || print_error "同步失败"
     sleep 1
 }
 
@@ -574,7 +682,8 @@ reorder_favorites() {
     echo "║    重排编号功能                                            ║"
     echo "╚════════════════════════════════════════════════════════════╝"
     echo ""
-    print_warning "此操作会重新分配所有 ID 为连续数字 (1, 2, 3...)"
+    print_warning "此操作会重新分配 C/S 的 ID 为连续数字 (1, 2, 3...)"
+    print_warning "链接(L)按行号自动排序，无需重排"
     read -p "确认执行? [y/N]: " confirm
     [[ ! "$confirm" =~ ^[Yy]$ ]] && return
     
@@ -589,15 +698,11 @@ reorder_favorites() {
     # 重排脚本 ID
     jq '.scripts | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.scripts"
     
-    # 重排链接 ID
-    jq '.links | sort_by(.id) | to_entries | map(.value + {id: (.key + 1)})' "$CACHE_FILE" > "$temp_file.links"
-    
-    # 合并结果
+    # 合并结果（不包含 links）
     jq -n \
         --slurpfile cmds "$temp_file.commands" \
         --slurpfile scripts "$temp_file.scripts" \
-        --slurpfile links "$temp_file.links" \
-        '{commands: $cmds[0], scripts: $scripts[0], links: $links[0]}' > "$CACHE_FILE.tmp"
+        '{commands: $cmds[0], scripts: $scripts[0]}' > "$CACHE_FILE.tmp"
     
     mv "$CACHE_FILE.tmp" "$CACHE_FILE"
     rm -f "$temp_file"*
@@ -835,10 +940,11 @@ handle_cli_args() {
     case "$1" in
         --help|-h) echo "Usage: t [C1|S1|L1] | tt | tc"; exit 0 ;;
         [Tt][Tt]) run_script_from_paste; exit 0 ;;
-        [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
+        [Cc]|[Tt][Cc]) init_config; sync_from_cloud silent; sync_links_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0 ;;
         [CcSsLl][0-9]*)
             init_config
-            sync_from_cloud silent 
+            sync_from_cloud silent
+            sync_links_from_cloud silent
             execute_direct_by_string "$1"
             exit 0
             ;;
@@ -856,7 +962,7 @@ main() {
     
     local name=$(basename "$0")
     [[ "$name" == "tt" ]] && { run_script_from_paste; exit 0; }
-    [[ "$name" == "tc" ]] && { sync_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
+    [[ "$name" == "tc" ]] && { sync_from_cloud silent; sync_links_from_cloud silent; IS_SYNCED="true"; command_script_favorites; exit 0; }
     
     [[ $# -gt 0 ]] && handle_cli_args "$@"
     main_menu

@@ -103,8 +103,3 @@ while true; do
     esac
 done
 EOF
-
-# 授权并设置别名
-chmod +x ~/sinstall.sh
-grep -q "alias install=" ~/.bashrc || echo "alias install='~/sinstall.sh'" >> ~/.bashrc
-source ~/.bashrc

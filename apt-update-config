@@ -1,42 +1,110 @@
-# 创建脚本文件
 cat << 'EOF' > ~/sinstall.sh
 #!/bin/bash
-# --- 配置区：设置更新间隔（月），可选 1, 3, 6 ---
-MONTHS_INTERVAL=1
-# --------------------------------------------
 
-INTERVAL_SEC=$(( MONTHS_INTERVAL * 30 * 24 * 3600 ))
+# --- 配置文件路径 ---
+CONFIG_FILE="$HOME/.sinstall_config"
 LAST_UPDATE_FILE="/var/lib/apt/periodic/update-success-stamp"
-CURRENT_TIME=$(date +%s)
 
-if [ -f "$LAST_UPDATE_FILE" ]; then
-    LAST_UPDATE_TIME=$(stat -c %Y "$LAST_UPDATE_FILE")
-else
-    LAST_UPDATE_TIME=0
-fi
+# 初始化更新频率（默认 1 个月）
+[ ! -f "$CONFIG_FILE" ] && echo "1" > "$CONFIG_FILE"
 
-DIFF=$(( CURRENT_TIME - LAST_UPDATE_TIME ))
+# 获取当前设置的频率
+get_interval() { cat "$CONFIG_FILE"; }
 
-# 1. 检查是否达到强制更新周期
-if [ $DIFF -gt $INTERVAL_SEC ]; then
-    echo "已超过 $MONTHS_INTERVAL 个月未更新，正在执行定期维护更新..."
-    sudo apt update
-fi
+# 菜单显示
+show_menu() {
+    clear
+    echo "=========================================="
+    echo "      N1 系统管家 (全功能简明版)"
+    echo "      更新频率: $(get_interval) 个月一次"
+    echo "=========================================="
+    echo " 1) 智能安装 (仅需时更新)"
+    echo " 2) 智能卸载 (彻底清理残留)"
+    echo " 3) 深度清理 (腾出磁盘空间)"
+    echo " 4) 设置更新周期 (1/3/6个月)"
+    echo " 5) 系统体检 (内核/Python/Node/硬件)"
+    echo " 6) 手动执行 apt update"
+    echo " q) 退出"
+    echo "------------------------------------------"
+    printf "请选择 [1-6/q]: "
+}
 
-# 2. 直接尝试安装
-echo "正在安装 $1..."
-sudo apt install -y "$1"
+# 1. 智能安装逻辑
+install_pkg() {
+    read -p "请输入要安装的包名: " pkg
+    [ -z "$pkg" ] && return
+    
+    INT_MONTHS=$(get_interval)
+    SEC=$(( INT_MONTHS * 30 * 24 * 3600 ))
+    CUR=$(date +%s)
+    LST=$(stat -c %Y "$LAST_UPDATE_FILE" 2>/dev/null || echo 0)
 
-# 3. 如果安装失败，则 update 后重试一次
-if [ $? -ne 0 ]; then
-    echo "本地找不到包，正在更新索引并重试..."
-    sudo apt update && sudo apt install -y "$1"
-fi
+    # 检查是否到期
+    if [ $(( CUR - LST )) -gt $SEC ]; then
+        echo ">> 周期已到，正在执行定期维护更新..."
+        sudo apt update
+    fi
+
+    # 尝试安装
+    echo ">> 正在安装 $pkg..."
+    sudo apt install -y "$pkg"
+    
+    # 失败重试逻辑
+    if [ $? -ne 0 ]; then
+        echo ">> 本地库找不到该包，正在强制更新索引重试..."
+        sudo apt update && sudo apt install -y "$pkg"
+    fi
+    read -p "处理完成，按回车返回..." temp
+}
+
+# 2. 卸载逻辑
+uninstall_pkg() {
+    read -p "请输入要卸载的包名: " pkg
+    [ -z "$pkg" ] && return
+    echo ">> 正在安全卸载并清理残留依赖..."
+    sudo apt purge -y "$pkg" && sudo apt autoremove -y
+    read -p "卸载完成，按回车返回..." temp
+}
+
+# 5. 系统环境体检
+sys_check() {
+    echo ">> 系统内核与环境:"
+    echo "------------------------------------------"
+    echo "内核版本: $(uname -r)"
+    echo "操作系统: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'=' -f2 | tr -d '\"')"
+    echo "Python3:  $(python3 --version 2>/dev/null || echo "未安装")"
+    echo "Node.js:  $(node -v 2>/dev/null || echo "未安装")"
+    echo "------------------------------------------"
+    echo ">> 硬件状态:"
+    echo "CPU温度:  $(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')°C"
+    echo "磁盘空间: $(df -h / | awk 'NR==2 {print $4" 可用 (共 "$2")"}')"
+    echo "内存空闲: $(free -h | awk 'NR==2 {print $4}')"
+    echo "------------------------------------------"
+    read -p "按回车返回..." temp
+}
+
+# 主循环
+while true; do
+    show_menu
+    read opt
+    case $opt in
+        1) install_pkg ;;
+        2) uninstall_pkg ;;
+        3) sudo apt clean && sudo apt autoremove -y && echo ">> 缓存已清空" && sleep 1 ;;
+        4) 
+           echo "请输入更新间隔月数 (1, 3 或 6):"
+           read f
+           [[ "$f" =~ ^[136]$ ]] && echo "$f" > "$CONFIG_FILE" && echo "设置成功！" || echo "输入无效"
+           sleep 1 ;;
+        5) sys_check ;;
+        6) sudo apt update && read -p "索引更新完毕，回车返回..." temp ;;
+        q) exit 0 ;;
+        *) echo "无效选项"; sleep 1 ;;
+    esac
+done
 EOF
 
-# 赋予执行权限
+# 授权并设置别名
 chmod +x ~/sinstall.sh
-
-# 设置别名，以后直接用 install 命令
-echo "alias install='~/sinstall.sh'" >> ~/.bashrc
+grep -q "alias install=" ~/.bashrc || echo "alias install='~/sinstall.sh'" >> ~/.bashrc
 source ~/.bashrc

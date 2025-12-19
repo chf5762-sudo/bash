@@ -1,4 +1,3 @@
-cat << 'EOF' > ~/sinstall.sh
 #!/bin/bash
 
 # --- 配置文件路径 ---

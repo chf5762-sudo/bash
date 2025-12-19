@@ -1,104 +1,82 @@
-#!/bin/bash
-
-# --- 配置文件路径 ---
+# --- 配置与环境 ---
 CONFIG_FILE="$HOME/.sinstall_config"
-LAST_UPDATE_FILE="/var/lib/apt/periodic/update-success-stamp"
-
-# 初始化更新频率（默认 1 个月）
 [ ! -f "$CONFIG_FILE" ] && echo "1" > "$CONFIG_FILE"
 
-# 获取当前设置的频率
-get_interval() { cat "$CONFIG_FILE"; }
+# --- 核心函数 ---
+check_link() {
+    curl -s --connect-timeout 2 "$1" > /dev/null && echo -e "$2: \e[32m[ 连通 ]\e[0m" || echo -e "$2: \e[31m[ 阻塞 ]\e[0m"
+}
 
-# 菜单显示
 show_menu() {
     clear
     echo "=========================================="
-    echo "      N1 系统管家 (全功能简明版)"
-    echo "      更新频率: $(get_interval) 个月一次"
+    echo "      N1 全能管家 (网络穿透增强版)"
     echo "=========================================="
-    echo " 1) 智能安装 (仅需时更新)"
-    echo " 2) 智能卸载 (彻底清理残留)"
+    echo " 1) 智能安装/更新 (apt)"
+    echo " 2) 系统体检 (详细 IP/连通性/硬件)"
     echo " 3) 深度清理 (腾出磁盘空间)"
-    echo " 4) 设置更新周期 (1/3/6个月)"
-    echo " 5) 系统体检 (内核/Python/Node/硬件)"
-    echo " 6) 手动执行 apt update"
+    echo " 4) 网络急救 (修复 DNS/路由/解锁)"
+    echo " 5) Tailscale 穿透修复 (TUN/转发/防火墙)"
+    echo " 6) 设置更新周期 ($(cat $CONFIG_FILE)个月)"
     echo " q) 退出"
     echo "------------------------------------------"
     printf "请选择 [1-6/q]: "
 }
 
-# 1. 智能安装逻辑
-install_pkg() {
-    read -p "请输入要安装的包名: " pkg
-    [ -z "$pkg" ] && return
-    
-    INT_MONTHS=$(get_interval)
-    SEC=$(( INT_MONTHS * 30 * 24 * 3600 ))
-    CUR=$(date +%s)
-    LST=$(stat -c %Y "$LAST_UPDATE_FILE" 2>/dev/null || echo 0)
-
-    # 检查是否到期
-    if [ $(( CUR - LST )) -gt $SEC ]; then
-        echo ">> 周期已到，正在执行定期维护更新..."
-        sudo apt update
-    fi
-
-    # 尝试安装
-    echo ">> 正在安装 $pkg..."
-    sudo apt install -y "$pkg"
-    
-    # 失败重试逻辑
-    if [ $? -ne 0 ]; then
-        echo ">> 本地库找不到该包，正在强制更新索引重试..."
-        sudo apt update && sudo apt install -y "$pkg"
-    fi
-    read -p "处理完成，按回车返回..." temp
-}
-
-# 2. 卸载逻辑
-uninstall_pkg() {
-    read -p "请输入要卸载的包名: " pkg
-    [ -z "$pkg" ] && return
-    echo ">> 正在安全卸载并清理残留依赖..."
-    sudo apt purge -y "$pkg" && sudo apt autoremove -y
-    read -p "卸载完成，按回车返回..." temp
-}
-
-# 5. 系统环境体检
 sys_check() {
-    echo ">> 系统内核与环境:"
+    echo ">> [网络地址详情]"
+    echo "内网 IPv4: $(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | xargs)"
+    echo "内网 IPv6: $(ip -6 addr show | grep -oP '(?<=inet6\s)[a-f0-9:]+' | grep -v '^fe80' | xargs)"
+    echo "虚拟网卡:  $(ip addr show | grep -E 'docker|br-|tailscale|tun' | awk -F': ' '{print $2}' | cut -d'@' -f1 | xargs)"
+    echo "公网 IP:   $(curl -s4 --connect-timeout 2 ifconfig.me || echo "超时")"
     echo "------------------------------------------"
-    echo "内核版本: $(uname -r)"
-    echo "操作系统: $(cat /etc/os-release | grep "PRETTY_NAME" | cut -d'=' -f2 | tr -d '\"')"
-    echo "Python3:  $(python3 --version 2>/dev/null || echo "未安装")"
-    echo "Node.js:  $(node -v 2>/dev/null || echo "未安装")"
+    echo ">> [连通性测试]"
+    check_link "www.aliyun.com" "阿里巴巴"
+    check_link "www.google.com" "Google  "
+    check_link "gemini.google.com" "Gemini  "
+    check_link "claude.ai" "Claude  "
     echo "------------------------------------------"
-    echo ">> 硬件状态:"
-    echo "CPU温度:  $(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')°C"
-    echo "磁盘空间: $(df -h / | awk 'NR==2 {print $4" 可用 (共 "$2")"}')"
-    echo "内存空闲: $(free -h | awk 'NR==2 {print $4}')"
-    echo "------------------------------------------"
+    echo ">> [硬件状态]"
+    echo "CPU温度: $(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')°C | 内存空闲: $(free -h | awk 'NR==2 {print $4}')"
     read -p "按回车返回..." temp
 }
 
-# 主循环
+net_fix() {
+    echo ">> 正在重置网络地图 (DNS)..."
+    sudo chattr -i /etc/resolv.conf 2>/dev/null
+    echo -e "nameserver 223.5.5.5\nnameserver 8.8.8.8" | sudo tee /etc/resolv.conf
+    sudo systemctl restart NetworkManager
+    echo ">> DNS 已恢复，请测试网络。"
+    sleep 2
+}
+
+ts_fix() {
+    echo ">> 正在修复 Tailscale 穿透环境..."
+    # 1. 加载内核模块
+    sudo modprobe tun
+    # 2. 开启内核转发
+    echo "net.ipv4.ip_forward = 1" | sudo tee /etc/sysctl.conf > /dev/null
+    sudo sysctl -p
+    # 3. 强开防火墙
+    sudo iptables -I INPUT -i tailscale0 -j ACCEPT
+    sudo iptables -I FORWARD -i tailscale0 -j ACCEPT
+    # 4. 彻底重置登录状态
+    sudo tailscale up --accept-dns=true --accept-routes=true --reset
+    echo ">> 修复完成，请在手机/电脑端尝试 Ping N1。"
+    sleep 2
+}
+
+# --- 主循环 ---
 while true; do
-    show_menu
-    read opt
+    show_menu; read opt
     case $opt in
-        1) install_pkg ;;
-        2) uninstall_pkg ;;
-        3) sudo apt clean && sudo apt autoremove -y && echo ">> 缓存已清空" && sleep 1 ;;
-        4) 
-           echo "请输入更新间隔月数 (1, 3 或 6):"
-           read f
-           [[ "$f" =~ ^[136]$ ]] && echo "$f" > "$CONFIG_FILE" && echo "设置成功！" || echo "输入无效"
-           sleep 1 ;;
-        5) sys_check ;;
-        6) sudo apt update && read -p "索引更新完毕，回车返回..." temp ;;
+        1) read -p "包名: " p; sudo apt install -y "$p" ;;
+        2) sys_check ;;
+        3) sudo apt clean && sudo apt autoremove -y ;;
+        4) net_fix ;;
+        5) ts_fix ;;
+        6) read -p "周期(1/3/6): " f; echo "$f" > "$CONFIG_FILE" ;;
         q) exit 0 ;;
-        *) echo "无效选项"; sleep 1 ;;
     esac
 done
 EOF

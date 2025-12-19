@@ -1,0 +1,42 @@
+# 创建脚本文件
+cat << 'EOF' > ~/sinstall.sh
+#!/bin/bash
+# --- 配置区：设置更新间隔（月），可选 1, 3, 6 ---
+MONTHS_INTERVAL=1
+# --------------------------------------------
+
+INTERVAL_SEC=$(( MONTHS_INTERVAL * 30 * 24 * 3600 ))
+LAST_UPDATE_FILE="/var/lib/apt/periodic/update-success-stamp"
+CURRENT_TIME=$(date +%s)
+
+if [ -f "$LAST_UPDATE_FILE" ]; then
+    LAST_UPDATE_TIME=$(stat -c %Y "$LAST_UPDATE_FILE")
+else
+    LAST_UPDATE_TIME=0
+fi
+
+DIFF=$(( CURRENT_TIME - LAST_UPDATE_TIME ))
+
+# 1. 检查是否达到强制更新周期
+if [ $DIFF -gt $INTERVAL_SEC ]; then
+    echo "已超过 $MONTHS_INTERVAL 个月未更新，正在执行定期维护更新..."
+    sudo apt update
+fi
+
+# 2. 直接尝试安装
+echo "正在安装 $1..."
+sudo apt install -y "$1"
+
+# 3. 如果安装失败，则 update 后重试一次
+if [ $? -ne 0 ]; then
+    echo "本地找不到包，正在更新索引并重试..."
+    sudo apt update && sudo apt install -y "$1"
+fi
+EOF
+
+# 赋予执行权限
+chmod +x ~/sinstall.sh
+
+# 设置别名，以后直接用 install 命令
+echo "alias install='~/sinstall.sh'" >> ~/.bashrc
+source ~/.bashrc

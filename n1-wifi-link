@@ -1,0 +1,64 @@
+#!/bin/bash
+
+echo "------------------------------------------"
+echo "正在扫描附近 WiFi，请稍候..."
+echo "------------------------------------------"
+
+# 1. 强制扫描
+sudo nmcli device wifi rescan
+sleep 1
+
+# 2. 获取 WiFi 列表并存入数组（处理空格并去重）
+# 格式：SSID:信号强度:安全
+mapfile -t wifi_list < <(nmcli -t -f "SSID,SIGNAL,SECURITY" device wifi list | grep -v "^:" | sort -u -t: -k1,1)
+
+if [ ${#wifi_list[@]} -eq 0 ]; then
+    echo "未发现任何 WiFi 信号，请检查天线或距离。"
+    exit 1
+fi
+
+# 3. 打印带编号的列表
+echo "发现以下网络："
+printf "%-5s %-25s %-10s %-10s\n" "编号" "WiFi名称(SSID)" "信号强度" "安全加密"
+echo "------------------------------------------"
+
+i=1
+for line in "${wifi_list[@]}"; do
+    IFS=":" read -r ssid signal security <<< "$line"
+    printf "[%2d]  %-25s %-10s %-10s\n" "$i" "$ssid" "$signal%" "$security"
+    ((i++))
+done
+
+echo "------------------------------------------"
+
+# 4. 获取用户选择
+read -p "请输入要连接的编号 (1-${#wifi_list[@]}): " choice
+
+# 校验输入是否为数字且在范围内
+if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#wifi_list[@]}" ]; then
+    echo "输入错误，操作取消。"
+    exit 1
+fi
+
+# 提取选中的 SSID
+selected_line="${wifi_list[$((choice-1))]}"
+target_ssid=$(echo "$selected_line" | cut -d':' -f1)
+
+# 5. 获取密码
+read -p "请输入 WiFi [$target_ssid] 的密码: " password
+
+# 6. 开始连接
+echo "------------------------------------------"
+echo "正在尝试连接到: $target_ssid ..."
+echo "注意：如果连接成功，当前的 SSH 会话将立即断开。"
+echo "------------------------------------------"
+
+# 执行连接
+sudo nmcli dev wifi connect "$target_ssid" password "$password"
+
+# 检查结果
+if [ $? -eq 0 ]; then
+    echo "连接成功！"
+else
+    echo "连接失败，请检查密码是否正确。"
+fi

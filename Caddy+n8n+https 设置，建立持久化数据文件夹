@@ -3,6 +3,11 @@ Caddy+n8n+建立持久化数据文件夹 给与 777 权限
 mkdir -p ./n8n-data && chmod -R 777 ./n8n-data && docker compose up -d 
 数据持久化，必须先建立n8n-data 文件夹映射，并授予777 权限，允许docker 有权限映射，否则报错 。
 
+修改镜像名并添加语言环境变量，然后重启
+sed -i 's|image: n8nio/n8n:latest|image: deluxebear/n8n:2.0.0-chs|' docker-compose.yml && \
+sed -i '/TZ=${TZ}/a \      - N8N_DEFAULT_LOCALE=zh-CN' docker-compose.yml && \
+docker compose up -d
+
 cname n8n.buenduredig.eu.org  vps1.beundredig.eu.org
 A     vps1.beundredig.eu.org  IPV4 地址
 
@@ -42,33 +47,28 @@ n8n.beundredig.eu.org:8443 {
         dns cloudflare {env.CF_API_TOKEN}
     }
 }
+
+
+
 n8n dockercompose.yaml
-这个配置文件采用了“安全增强型”写法，将端口限制在本地，并解决了你遇到的权限痛点。
+
 services:
   n8n:
-    image: n8nio/n8n:latest
+    # 替换为魔改汉化版镜像
+    image: deluxebear/n8n:2.0.0-chs
     container_name: n8n
     restart: unless-stopped
     ports:
-      # 127.0.0.1 确保端口只对宿主机（及 Caddy）开放，外网无法绕过 Caddy 直接访问
-      - "127.0.0.1:5678:5678"
+      - "127.0.0.1:5678:5678" 
     environment:
-      # n8n 运行的域名
-      - N8N_HOST=n8n.beundredig.eu.org
-      # 容器内部监听端口
+      - N8N_HOST=${N8N_HOST}
       - N8N_PORT=5678
-      # 必须设为 https，否则生成的 Webhook 链接会因协议错误导致外部无法回调
       - N8N_PROTOCOL=https
-      # 关键：告诉 n8n 完整的外部访问地址（包含 Caddy 监听的非标准端口）
-      - WEBHOOK_URL=https://n8n.beundredig.eu.org:8443/
-      # 时区设置，确保自动化流程中的时间逻辑正确
-      - GENERIC_TIMEZONE=Asia/Shanghai
-      - TZ=Asia/Shanghai
+      - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${TZ}
+      # 强制开启中文支持
+      - N8N_DEFAULT_LOCALE=zh-CN
     volumes:
-      # 宿主机目录 : 容器内部目录
-      # 注意：宿主机 ./n8n-data 必须执行 chown -R 1000:1000 赋予写入权
+      # 保持路径一致，确保数据不丢失
       - ./n8n-data:/home/node/.n8n
-networks:
-  # 默认使用 bridge 模式，与 Caddy 所在宿主机网络互通
-  default:
-    name: n8n-network

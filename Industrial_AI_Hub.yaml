@@ -1,0 +1,257 @@
+app:
+  description: 工业级工作流（无模型绑定版）。导入后请手动在该工作流内配置每个节点的模型。
+  icon: 🏭
+  icon_background: '#1C64F2'
+  mode: workflow
+  name: Industrial AI Hub (Clean Logic)
+
+workflow:
+  version: 0.1.0
+  features:
+    file_upload:
+      image:
+        enabled: true
+        number_limits: 1
+        transfer_methods:
+        - local_file
+        - remote_url
+    retriever_resource:
+      enabled: true
+  graph:
+    edges:
+    # 1. Start -> Condition
+    - id: edge_1
+      source: start
+      target: vision_condition
+    
+    # 2. Condition -> Vision (True)
+    - id: edge_2
+      source: vision_condition
+      target: vision_llm_main
+      sourceHandle: 'true'
+    
+    # 3. Condition -> Classifier (False)
+    - id: edge_3
+      source: vision_condition
+      target: intent_classifier
+      sourceHandle: 'false'
+
+    # --- Classifier Branches ---
+    - id: edge_4
+      source: intent_classifier
+      target: task_extractor
+      sourceHandle: action
+    
+    - id: edge_5
+      source: task_extractor
+      target: http_task_executor
+
+    - id: edge_6
+      source: intent_classifier
+      target: knowledge_retrieval
+      sourceHandle: knowledge
+    
+    - id: edge_7
+      source: knowledge_retrieval
+      target: rag_llm
+
+    - id: edge_8
+      source: intent_classifier
+      target: chat_llm_main
+      sourceHandle: chat
+
+    # --- Failovers ---
+    - id: edge_fail_1
+      source: chat_llm_main
+      target: chat_llm_backup
+      sourceHandle: fail
+    
+    - id: edge_fail_2
+      source: http_task_executor
+      target: error_output
+      sourceHandle: fail
+
+    # --- Ends ---
+    - id: edge_end_1
+      source: vision_llm_main
+      target: end
+    - id: edge_end_2
+      source: http_task_executor
+      target: end
+    - id: edge_end_3
+      source: rag_llm
+      target: end
+    - id: edge_end_4
+      source: chat_llm_main
+      target: end
+    - id: edge_end_5
+      source: chat_llm_backup
+      target: end
+    - id: edge_end_6
+      source: error_output
+      target: end
+
+    nodes:
+    # 1. Start
+    - id: start
+      position: {x: 50, y: 300}
+      type: start
+      data:
+        title: 开始
+        variables:
+        - label: User Query
+          variable: query
+          type: paragraph
+          required: true
+          max_length: 2000
+        - label: User ID
+          variable: user_id
+          type: text
+          required: true
+
+    # 2. Vision Condition
+    - id: vision_condition
+      position: {x: 350, y: 300}
+      type: if-else
+      data:
+        title: 是否包含图片
+        conditions:
+        - variable_selector: [sys, files]
+          comparison_operator: exists
+
+    # 3. Vision LLM (Empty Model)
+    - id: vision_llm_main
+      position: {x: 650, y: 50}
+      type: llm
+      data:
+        title: 视觉分析
+        # 模型参数已留空，导入后请手动选择支持 Vision 的模型
+        model:
+          mode: chat
+        prompt_template:
+        - role: system
+          text: "分析图片内容：{{#start.query#}}"
+        vision:
+          enabled: true
+
+    # 4. Intent Classifier (Empty Model)
+    - id: intent_classifier
+      position: {x: 650, y: 400}
+      type: question-classifier
+      data:
+        title: 意图分类
+        # 模型参数已留空
+        model:
+          mode: chat
+        classes:
+        - id: action
+          name: 任务指令
+        - id: knowledge
+          name: 知识问答
+        - id: chat
+          name: 闲聊
+        instruction: "请分类用户意图"
+
+    # 5. Parameter Extractor (Empty Model)
+    - id: task_extractor
+      position: {x: 950, y: 150}
+      type: llm
+      data:
+        title: 参数提取
+        model:
+          mode: chat
+        prompt_template:
+        - role: system
+          text: "提取参数为JSON: {{#start.query#}}"
+
+    # 6. HTTP Executor (Empty URL)
+    - id: http_task_executor
+      position: {x: 1250, y: 150}
+      type: http-request
+      data:
+        title: HTTP执行
+        method: post
+        # URL 留空，请手动填写
+        url: ""
+        authorization: {type: no-auth}
+        body:
+          type: json
+          data: '{{#task_extractor.text#}}'
+        timeout: 5000
+
+    # 7. Knowledge Retrieval
+    - id: knowledge_retrieval
+      position: {x: 950, y: 400}
+      type: knowledge-retrieval
+      data:
+        title: 知识检索
+        query_variable_selector: [start, query]
+        retrieval_mode: hybrid
+
+    # 8. RAG LLM (Empty Model)
+    - id: rag_llm
+      position: {x: 1250, y: 400}
+      type: llm
+      data:
+        title: RAG回答
+        model:
+          mode: chat
+        context:
+          enabled: true
+          variable_selector: [knowledge_retrieval, result]
+        prompt_template:
+        - role: system
+          text: "基于上下文回答: {{#context#}}"
+
+    # 9. Chat Main (Empty Model)
+    - id: chat_llm_main
+      position: {x: 950, y: 650}
+      type: llm
+      data:
+        title: 闲聊(主)
+        model:
+          mode: chat
+        prompt_template:
+        - role: system
+          text: "回答: {{#start.query#}}"
+
+    # 10. Chat Backup (Empty Model)
+    - id: chat_llm_backup
+      position: {x: 1250, y: 750}
+      type: llm
+      data:
+        title: 闲聊(备用)
+        model:
+          mode: chat
+        prompt_template:
+        - role: system
+          text: "备用回答: {{#start.query#}}"
+
+    # 11. Error Output
+    - id: error_output
+      position: {x: 1550, y: 100}
+      type: template-transform
+      data:
+        title: 错误输出
+        template: "执行失败"
+        variables: []
+
+    # 12. End
+    - id: end
+      position: {x: 1800, y: 400}
+      type: end
+      data:
+        title: 结束
+        outputs:
+        - variable: res_vision
+          value_selector: [vision_llm_main, text]
+        - variable: res_task
+          value_selector: [http_task_executor, body]
+        - variable: res_rag
+          value_selector: [rag_llm, text]
+        - variable: res_chat
+          value_selector: [chat_llm_main, text]
+        - variable: res_backup
+          value_selector: [chat_llm_backup, text]
+        - variable: res_error
+          value_selector: [error_output, output]

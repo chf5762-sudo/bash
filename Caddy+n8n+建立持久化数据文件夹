@@ -1,0 +1,74 @@
+Caddy+n8n+建立持久化数据文件夹 给与 777 权限
+
+mkdir -p ./n8n-data && chmod -R 777 ./n8n-data && docker compose up -d 
+数据持久化，必须先建立n8n-data 文件夹映射，并授予777 权限，允许docker 有权限映射，否则报错 。
+
+cname n8n.buenduredig.eu.org  vps1.beundredig.eu.org
+A     vps1.beundredig.eu.org  IPV4 地址
+
+
+
+
+Caddy 配置： /etc/Caddyfile
+
+{
+    # --- 全局配置块 ---
+    # 定义 Caddy 内部通信端口，避开 80
+    http_port  8080
+    
+    # 定义 HTTPS 监听端口，避开 443
+    https_port 8443
+    
+    # 因为 80 端口被 Dify 占用或未开放，必须关闭“自动从 80 跳转到 443”的功能
+    auto_https disable_redirects 
+}
+
+# 访问地址必须带上非标准端口 8443
+n8n.beundredig.eu.org:8443 {
+    # 转发请求到 n8n 容器
+    reverse_proxy 127.0.0.1:5678
+
+    tls {
+        # 核心：使用 DNS 方式申请证书
+        # 即使 80/443 端口不通，只要 Token 正确，证书就能下发
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+}
+
+# 1Panel 转发配置
+1panel-vps1.beundredig.eu.org:39391 {
+    reverse_proxy 127.0.0.1:39390
+    tls {
+        dns cloudflare {env.CF_API_TOKEN}
+    }
+}
+n8n dockercompose.yaml
+这个配置文件采用了“安全增强型”写法，将端口限制在本地，并解决了你遇到的权限痛点。
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      # 127.0.0.1 确保端口只对宿主机（及 Caddy）开放，外网无法绕过 Caddy 直接访问
+      - "127.0.0.1:5678:5678"
+    environment:
+      # n8n 运行的域名
+      - N8N_HOST=n8n.beundredig.eu.org
+      # 容器内部监听端口
+      - N8N_PORT=5678
+      # 必须设为 https，否则生成的 Webhook 链接会因协议错误导致外部无法回调
+      - N8N_PROTOCOL=https
+      # 关键：告诉 n8n 完整的外部访问地址（包含 Caddy 监听的非标准端口）
+      - WEBHOOK_URL=https://n8n.beundredig.eu.org:8443/
+      # 时区设置，确保自动化流程中的时间逻辑正确
+      - GENERIC_TIMEZONE=Asia/Shanghai
+      - TZ=Asia/Shanghai
+    volumes:
+      # 宿主机目录 : 容器内部目录
+      # 注意：宿主机 ./n8n-data 必须执行 chown -R 1000:1000 赋予写入权
+      - ./n8n-data:/home/node/.n8n
+networks:
+  # 默认使用 bridge 模式，与 Caddy 所在宿主机网络互通
+  default:
+    name: n8n-network

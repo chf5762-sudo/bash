@@ -1,123 +1,396 @@
 #!/bin/bash
+# ============================================================
+# Armbian N1 蓝牙音箱一键管理脚本
+# 功能: 安装、配置、自动连接蓝牙音箱
+# 模式: PulseAudio 系统模式 (--system)
+# ============================================================
 
-# 检查是否为 root
-[[ $EUID -ne 0 ]] && echo "请以 root 权限运行此脚本 (sudo)" && exit 1
+BT_MAC="FC:A8:9A:FF:82:C5"  # 默认音箱MAC地址
+CONFIG_DIR="/etc/pulse"
+SYSTEM_PA="${CONFIG_DIR}/system.pa"
+SERVICE_FILE="/etc/systemd/system/bt-audio-manager.service"
+MAC_FILE="/etc/bluetooth/.bt_device"
 
-MAC_FILE="/etc/bluetooth/.last_mac"
-SERVICE_FILE="/etc/systemd/system/bt-autoccn.service"
+# 颜色输出
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# --- 1. 系统初始化与驱动安装 ---
-init_env() {
-    echo "正在修复软件源并安装驱动..."
-    # 修复 Armbian 403 错误（换源至清华镜像）
-    sed -i 's/apt.armbian.com/mirrors.tuna.tsinghua.edu.cn\/armbian/g' /etc/apt/sources.list.d/armbian.list 2>/dev/null
-    apt update -qq
-    apt install -y bluez bluez-tools pulseaudio-module-bluetooth > /dev/null 2>&1
+print_info() { echo -e "${GREEN}[信息]${NC} $1"; }
+print_warn() { echo -e "${YELLOW}[警告]${NC} $1"; }
+print_error() { echo -e "${RED}[错误]${NC} $1"; }
+
+# ============================================================
+# 1. 安装所有必需组件
+# ============================================================
+install_packages() {
+    print_info "安装蓝牙音频组件..."
     
-    # 配置开机默认上电
-    sed -i 's/^#AutoEnable=.*/AutoEnable=true/' /etc/bluetooth/main.conf
-    systemctl enable bluetooth --now > /dev/null
-    echo "驱动与环境配置完成！"
+    apt update
+    apt install -y \
+        bluez \
+        bluez-tools \
+        pulseaudio \
+        pulseaudio-module-bluetooth \
+        || { print_error "安装失败"; exit 1; }
+    
+    print_info "✓ 安装完成"
 }
 
-# --- 2. 扫描、选择、信任并连接 ---
-setup_device() {
-    echo "正在开启蓝牙并扫描设备 (15秒)..."
-    bluetoothctl power on > /dev/null
-    bluetoothctl --timeout 15 scan on > /dev/null & sleep 16
+# ============================================================
+# 2. 配置 PulseAudio 系统模式 (关键)
+# ============================================================
+configure_pulseaudio() {
+    print_info "配置 PulseAudio 系统模式..."
     
-    mapfile -t devices < <(bluetoothctl devices | awk '{print $2, substr($0, index($0,$3))}')
+    # 确保pulse用户存在
+    id pulse &>/dev/null || useradd -r -d /var/run/pulse pulse
+    usermod -aG audio,bluetooth pulse
     
-    if [ ${#devices[@]} -eq 0 ]; then
-        echo "未发现设备，请确保音箱处于配对模式。"
-        return
+    # 创建系统模式配置文件 (必须在此预加载蓝牙模块)
+    mkdir -p "$CONFIG_DIR"
+    cat > "$SYSTEM_PA" << 'EOF'
+### PulseAudio 系统模式配置 ###
+# 此配置使 PulseAudio 以系统模式运行,支持蓝牙音频
+
+# 基础模块
+load-module module-device-restore
+load-module module-card-restore
+load-module module-udev-detect
+load-module module-native-protocol-unix auth-anonymous=1
+load-module module-default-device-restore
+load-module module-always-sink
+load-module module-rescue-streams
+load-module module-suspend-on-idle
+
+# 蓝牙模块 (核心 - 必须预加载)
+load-module module-bluetooth-discover
+load-module module-bluetooth-policy
+
+# 自动切换到蓝牙设备
+load-module module-switch-on-connect
+EOF
+    
+    print_info "✓ 系统模式配置完成: $SYSTEM_PA"
+}
+
+# ============================================================
+# 3. 启动 PulseAudio 系统模式
+# ============================================================
+start_pulseaudio() {
+    print_info "启动 PulseAudio 系统模式..."
+    
+    # 清理旧进程
+    pkill -9 pulseaudio
+    rm -rf /var/run/pulse /root/.config/pulse
+    sleep 1
+    
+    # 以系统模式启动 (允许root运行)
+    pulseaudio --system -D --disallow-exit
+    sleep 2
+    
+    # 验证启动
+    if pactl info &>/dev/null; then
+        print_info "✓ PulseAudio 系统模式运行中"
+        pactl info | grep "Server Name"
+    else
+        print_error "PulseAudio 启动失败"
+        return 1
     fi
-
-    echo -e "\n发现以下设备:"
-    echo "---------------------------------------"
-    for i in "${!devices[@]}"; do echo "[$i] ${devices[$i]}"; done
-    echo "---------------------------------------"
-    read -p "请输入要绑定的设备编号: " choice
-    
-    SELECTED_MAC=$(echo "${devices[$choice]}" | cut -d' ' -f1)
-    if [ -z "$SELECTED_MAC" ]; then echo "无效选择"; return; fi
-
-    echo "正在执行 配对 -> 信任 -> 连接..."
-    bluetoothctl pair $SELECTED_MAC
-    bluetoothctl trust $SELECTED_MAC
-    bluetoothctl connect $SELECTED_MAC
-    
-    echo "$SELECTED_MAC" > $MAC_FILE
-    echo "设备 $SELECTED_MAC 已注册为受信任设备。"
 }
 
-# --- 3. 注册开机自启服务 ---
-register_service() {
-    echo "正在创建后台监控服务..."
-    cat > $SERVICE_FILE <<EOF
+# ============================================================
+# 4. 创建开机自启服务
+# ============================================================
+create_service() {
+    print_info "创建开机自启服务..."
+    
+    cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=Bluetooth Auto Connect Guard
-After=bluetooth.service
-Wants=bluetooth.service
+Description=蓝牙音箱自动连接服务
+After=bluetooth.service pulseaudio.service
+Requires=bluetooth.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/bt-manager.sh --daemon
-Restart=always
-RestartSec=30
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/bt-auto-connect.sh
+Restart=on-failure
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
 EOF
+    
+    # 创建自动连接脚本
+    cat > /usr/local/bin/bt-auto-connect.sh << 'SCRIPT'
+#!/bin/bash
+MAC_FILE="/etc/bluetooth/.bt_device"
+BT_MAC=$(cat "$MAC_FILE" 2>/dev/null)
+
+[[ -z "$BT_MAC" ]] && exit 0
+
+# 确保 PulseAudio 系统模式运行
+pgrep -f "pulseaudio --system" || pulseaudio --system -D --disallow-exit
+sleep 3
+
+# 循环尝试连接
+for i in {1..5}; do
+    echo "[$(date)] 尝试连接 $BT_MAC (第${i}次)..."
+    bluetoothctl connect "$BT_MAC" && break
+    sleep 5
+done
+
+# 设置为默认输出
+sleep 2
+SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+[[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+SCRIPT
+    
+    chmod +x /usr/local/bin/bt-auto-connect.sh
+    
     systemctl daemon-reload
-    systemctl enable bt-autoccn.service
-    systemctl start bt-autoccn.service
-    echo "开机自启服务已激活：每分钟自动重连 + 接受被动连接。"
+    systemctl enable bt-audio-manager.service
+    
+    print_info "✓ 开机自启服务已创建"
 }
 
-# --- 4. 后台守护进程逻辑 ---
-run_daemon() {
-    TARGET=$(cat $MAC_FILE 2>/dev/null)
-    [[ -z "$TARGET" ]] && exit 0
+# ============================================================
+# 5. 扫描并列出蓝牙设备
+# ============================================================
+scan_devices() {
+    print_info "扫描蓝牙设备 (10秒)..."
+    
+    # 启动扫描
+    timeout 10 bluetoothctl scan on &>/dev/null &
+    local scan_pid=$!
+    
+    sleep 10
+    kill $scan_pid 2>/dev/null
+    
+    # 获取设备列表
+    print_info "发现的设备:"
+    echo "════════════════════════════════════════════════════"
+    
+    local devices=()
+    local index=1
+    
+    while IFS= read -r line; do
+        if [[ $line =~ Device\ ([0-9A-F:]+)\ (.+) ]]; then
+            local mac="${BASH_REMATCH[1]}"
+            local name="${BASH_REMATCH[2]}"
+            
+            # 过滤掉无名设备和重复设备
+            if [[ "$name" != "$mac" ]] && [[ ! " ${devices[@]} " =~ " ${mac} " ]]; then
+                printf "${GREEN}%2d${NC}. %s ${YELLOW}[%s]${NC}\n" "$index" "$name" "$mac"
+                devices+=("$mac|$name")
+                ((index++))
+            fi
+        fi
+    done < <(bluetoothctl devices)
+    
+    echo "════════════════════════════════════════════════════"
+    
+    if [[ ${#devices[@]} -eq 0 ]]; then
+        print_warn "未发现设备"
+        return 1
+    fi
+    
+    # 让用户选择
+    echo -n "选择设备编号 (0=取消): "
+    read -r choice
+    
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -gt 0 ]] && [[ $choice -le ${#devices[@]} ]]; then
+        local selected="${devices[$((choice-1))]}"
+        local mac="${selected%%|*}"
+        local name="${selected#*|}"
+        
+        print_info "已选择: $name [$mac]"
+        connect_device "$mac" "$name"
+    else
+        print_warn "取消操作"
+        return 1
+    fi
+}
+
+# ============================================================
+# 6. 手动连接蓝牙设备
+# ============================================================
+connect_device() {
+    local mac="$1"
+    local name="${2:-未知设备}"
+    
+    print_info "连接蓝牙设备: $name [$mac]"
+    
+    # 确保服务运行
+    systemctl restart bluetooth
+    start_pulseaudio
+    sleep 2
+    
+    # 配对并连接
+    bluetoothctl trust "$mac"
+    bluetoothctl pair "$mac" 2>/dev/null
+    sleep 1
+    bluetoothctl connect "$mac"
+    
+    sleep 3
+    
+    # 检查连接状态
+    if bluetoothctl info "$mac" | grep -q "Connected: yes"; then
+        print_info "✓ 连接成功: $name"
+        
+        # 设置为默认输出
+        SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+        if [[ -n "$SINK" ]]; then
+            pactl set-default-sink "$SINK"
+            print_info "✓ 已设为默认音频输出"
+        fi
+        
+        # 保存MAC地址和名称
+        echo "$mac" > "$MAC_FILE"
+        echo "$name" > "${MAC_FILE}.name"
+        
+        # 提示开启自动连接
+        echo ""
+        echo -n "是否开启开机自动连接? (y/n): "
+        read -r auto
+        if [[ "$auto" =~ ^[Yy]$ ]]; then
+            systemctl enable bt-audio-manager.service
+            systemctl restart bt-audio-manager.service
+            print_info "✓ 已开启自动连接"
+        fi
+        
+        return 0
+    else
+        print_error "连接失败"
+        return 1
+    fi
+}
+
+# ============================================================
+# 7. 测试音频播放
+# ============================================================
+test_audio() {
+    print_info "播放测试音 (5秒)..."
+    speaker-test -t wav -c 2 -l 1
+}
+
+# ============================================================
+# 8. 查看状态
+# ============================================================
+show_status() {
+    echo "════════════════════════════════════════"
+    echo "PulseAudio 状态:"
+    pactl info 2>/dev/null | grep -E "Server Name|Server Version" || echo "未运行"
+    
+    echo ""
+    echo "音频设备列表:"
+    pactl list sinks short
+    
+    echo ""
+    echo "当前连接的蓝牙设备:"
+    if [[ -f "$MAC_FILE" ]]; then
+        MAC=$(cat "$MAC_FILE")
+        NAME=$(cat "${MAC_FILE}.name" 2>/dev/null || echo "未知设备")
+        echo "设备名称: $NAME"
+        bluetoothctl info "$MAC" | grep -E "Connected|Paired"
+    else
+        echo "无已保存设备"
+    fi
+    
+    echo ""
+    echo "自启服务状态:"
+    systemctl status bt-audio-manager.service --no-pager -l | head -10
+    echo "════════════════════════════════════════"
+}
+
+# ============================================================
+# 菜单
+# ============================================================
+show_menu() {
+    clear
+    echo "════════════════════════════════════════════════════"
+    echo "      Armbian N1 蓝牙音箱管理脚本"
+    echo "      模式: PulseAudio 系统模式 (--system)"
+    echo "════════════════════════════════════════════════════"
+    echo "1. 完整安装 (安装组件 + 配置系统模式 + 开机自启)"
+    echo "2. 扫描并连接蓝牙设备 (带编号选择)"
+    echo "3. 手动连接指定MAC地址"
+    echo "4. 启动 PulseAudio 系统模式"
+    echo "5. 测试音频播放"
+    echo "6. 查看状态"
+    echo "7. 重启服务"
+    echo "8. 开启/关闭自动连接"
+    echo "0. 退出"
+    echo "════════════════════════════════════════════════════"
+    echo -n "请选择: "
+}
+
+# ============================================================
+# 主程序
+# ============================================================
+main() {
+    # 检查root权限
+    [[ $EUID -ne 0 ]] && { print_error "需要root权限"; exit 1; }
     
     while true; do
-        # 检查状态，不在线则主动重连
-        if ! bluetoothctl info "$TARGET" | grep -q "Connected: yes"; then
-            bluetoothctl connect "$TARGET" > /dev/null 2>&1
-        fi
-        # 保持扫描开启，方便被动连接发现
-        bluetoothctl --timeout 10 scan on > /dev/null 2>&1
-        sleep 50
+        show_menu
+        read -r choice
+        
+        case $choice in
+            1)
+                print_info "开始完整安装..."
+                install_packages
+                configure_pulseaudio
+                start_pulseaudio
+                create_service
+                print_info "✓ 完整安装完成,请选择菜单2扫描设备"
+                ;;
+            2)
+                scan_devices
+                ;;
+            3)
+                echo -n "输入蓝牙MAC地址: "
+                read -r mac
+                [[ -n "$mac" ]] && connect_device "$mac"
+                ;;
+            4)
+                start_pulseaudio
+                ;;
+            5)
+                test_audio
+                ;;
+            6)
+                show_status
+                ;;
+            7)
+                print_info "重启所有服务..."
+                systemctl restart bluetooth
+                start_pulseaudio
+                systemctl restart bt-audio-manager.service
+                print_info "✓ 重启完成"
+                ;;
+            8)
+                if systemctl is-enabled bt-audio-manager.service &>/dev/null; then
+                    systemctl disable bt-audio-manager.service
+                    print_info "✓ 已关闭自动连接"
+                else
+                    systemctl enable bt-audio-manager.service
+                    print_info "✓ 已开启自动连接"
+                fi
+                ;;
+            0)
+                exit 0
+                ;;
+            *)
+                print_error "无效选择"
+                ;;
+        esac
+        
+        echo ""
+        read -p "按回车继续..." -r
     done
 }
 
-# --- 主菜单 ---
-show_menu() {
-    clear
-    echo "======================================="
-    echo "      Armbian N1 蓝牙全能管理工具"
-    echo "======================================="
-    echo " 1. 安装驱动并优化环境 (首次运行)"
-    echo " 2. 扫描并配对音箱 (编号选择)"
-    echo " 3. 开启开机自启与后台监控"
-    echo " 4. 一键执行以上所有 (推荐)"
-    echo " 5. 退出"
-    echo "======================================="
-    read -p "请输入选项 [1-5]: " opt
-
-    case $opt in
-        1) init_env ;;
-        2) setup_device ;;
-        3) register_service ;;
-        4) init_env; setup_device; register_service ;;
-        5) exit 0 ;;
-        *) echo "无效选项" ;;
-    esac
-}
-
-# 判断是运行菜单还是运行后台守护模式
-if [[ "$1" == "--daemon" ]]; then
-    run_daemon
-else
-    show_menu
-fi
+main

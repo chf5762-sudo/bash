@@ -1,0 +1,123 @@
+#!/bin/bash
+
+# 检查是否为 root
+[[ $EUID -ne 0 ]] && echo "请以 root 权限运行此脚本 (sudo)" && exit 1
+
+MAC_FILE="/etc/bluetooth/.last_mac"
+SERVICE_FILE="/etc/systemd/system/bt-autoccn.service"
+
+# --- 1. 系统初始化与驱动安装 ---
+init_env() {
+    echo "正在修复软件源并安装驱动..."
+    # 修复 Armbian 403 错误（换源至清华镜像）
+    sed -i 's/apt.armbian.com/mirrors.tuna.tsinghua.edu.cn\/armbian/g' /etc/apt/sources.list.d/armbian.list 2>/dev/null
+    apt update -qq
+    apt install -y bluez bluez-tools pulseaudio-module-bluetooth > /dev/null 2>&1
+    
+    # 配置开机默认上电
+    sed -i 's/^#AutoEnable=.*/AutoEnable=true/' /etc/bluetooth/main.conf
+    systemctl enable bluetooth --now > /dev/null
+    echo "驱动与环境配置完成！"
+}
+
+# --- 2. 扫描、选择、信任并连接 ---
+setup_device() {
+    echo "正在开启蓝牙并扫描设备 (15秒)..."
+    bluetoothctl power on > /dev/null
+    bluetoothctl --timeout 15 scan on > /dev/null & sleep 16
+    
+    mapfile -t devices < <(bluetoothctl devices | awk '{print $2, substr($0, index($0,$3))}')
+    
+    if [ ${#devices[@]} -eq 0 ]; then
+        echo "未发现设备，请确保音箱处于配对模式。"
+        return
+    fi
+
+    echo -e "\n发现以下设备:"
+    echo "---------------------------------------"
+    for i in "${!devices[@]}"; do echo "[$i] ${devices[$i]}"; done
+    echo "---------------------------------------"
+    read -p "请输入要绑定的设备编号: " choice
+    
+    SELECTED_MAC=$(echo "${devices[$choice]}" | cut -d' ' -f1)
+    if [ -z "$SELECTED_MAC" ]; then echo "无效选择"; return; fi
+
+    echo "正在执行 配对 -> 信任 -> 连接..."
+    bluetoothctl pair $SELECTED_MAC
+    bluetoothctl trust $SELECTED_MAC
+    bluetoothctl connect $SELECTED_MAC
+    
+    echo "$SELECTED_MAC" > $MAC_FILE
+    echo "设备 $SELECTED_MAC 已注册为受信任设备。"
+}
+
+# --- 3. 注册开机自启服务 ---
+register_service() {
+    echo "正在创建后台监控服务..."
+    cat > $SERVICE_FILE <<EOF
+[Unit]
+Description=Bluetooth Auto Connect Guard
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/bt-manager.sh --daemon
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable bt-autoccn.service
+    systemctl start bt-autoccn.service
+    echo "开机自启服务已激活：每分钟自动重连 + 接受被动连接。"
+}
+
+# --- 4. 后台守护进程逻辑 ---
+run_daemon() {
+    TARGET=$(cat $MAC_FILE 2>/dev/null)
+    [[ -z "$TARGET" ]] && exit 0
+    
+    while true; do
+        # 检查状态，不在线则主动重连
+        if ! bluetoothctl info "$TARGET" | grep -q "Connected: yes"; then
+            bluetoothctl connect "$TARGET" > /dev/null 2>&1
+        fi
+        # 保持扫描开启，方便被动连接发现
+        bluetoothctl --timeout 10 scan on > /dev/null 2>&1
+        sleep 50
+    done
+}
+
+# --- 主菜单 ---
+show_menu() {
+    clear
+    echo "======================================="
+    echo "      Armbian N1 蓝牙全能管理工具"
+    echo "======================================="
+    echo " 1. 安装驱动并优化环境 (首次运行)"
+    echo " 2. 扫描并配对音箱 (编号选择)"
+    echo " 3. 开启开机自启与后台监控"
+    echo " 4. 一键执行以上所有 (推荐)"
+    echo " 5. 退出"
+    echo "======================================="
+    read -p "请输入选项 [1-5]: " opt
+
+    case $opt in
+        1) init_env ;;
+        2) setup_device ;;
+        3) register_service ;;
+        4) init_env; setup_device; register_service ;;
+        5) exit 0 ;;
+        *) echo "无效选项" ;;
+    esac
+}
+
+# 判断是运行菜单还是运行后台守护模式
+if [[ "$1" == "--daemon" ]]; then
+    run_daemon
+else
+    show_menu
+fi

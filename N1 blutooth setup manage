@@ -1,8 +1,9 @@
 #!/bin/bash
 # ============================================================
-# Armbian N1 蓝牙音箱一键管理脚本
+# Armbian N1 蓝牙音箱一键管理脚本 (改进版)
 # 功能: 安装、配置、自动连接蓝牙音箱
 # 模式: PulseAudio 系统模式 (--system)
+# 改进: 智能连接流程 + 提示音 + 被动配对
 # ============================================================
 
 BT_MAC="FC:A8:9A:FF:82:C5"  # 默认音箱MAC地址
@@ -10,6 +11,7 @@ CONFIG_DIR="/etc/pulse"
 SYSTEM_PA="${CONFIG_DIR}/system.pa"
 SERVICE_FILE="/etc/systemd/system/bt-audio-manager.service"
 MAC_FILE="/etc/bluetooth/.bt_device"
+HISTORY_FILE="/etc/bluetooth/.bt_history"  # 新增:连接历史记录
 
 # 颜色输出
 RED='\033[0;31m'
@@ -22,19 +24,73 @@ print_warn() { echo -e "${YELLOW}[警告]${NC} $1"; }
 print_error() { echo -e "${RED}[错误]${NC} $1"; }
 
 # ============================================================
+# 新增: 播放提示音 (0.2秒短促音) - 改进版
+# ============================================================
+play_beep() {
+    # 确保使用 PulseAudio
+    export PULSE_SERVER=unix:/var/run/pulse/native
+    
+    # 方案1: 使用 paplay (PulseAudio 原生工具)
+    if command -v paplay &>/dev/null; then
+        # 生成临时音频文件
+        ffmpeg -f lavfi -i "sine=frequency=800:duration=0.2" -ar 48000 -ac 2 /tmp/beep.wav -y &>/dev/null 2>&1
+        if [[ -f /tmp/beep.wav ]]; then
+            paplay /tmp/beep.wav 2>/dev/null
+            rm -f /tmp/beep.wav
+            return 0
+        fi
+    fi
+    
+    # 方案2: 使用 speaker-test (ALSA)
+    timeout 0.5 speaker-test -t sine -f 800 -c 1 -l 1 -p 20000 2>/dev/null &
+    sleep 0.3
+    pkill -9 speaker-test 2>/dev/null
+}
+
+# ============================================================
+# 新增: 记录连接历史 (带时间戳)
+# ============================================================
+record_connection() {
+    local mac="$1"
+    local name="${2:-未知设备}"
+    local timestamp=$(date +%s)
+    
+    # 删除旧记录,追加新记录
+    sed -i "/^$mac|/d" "$HISTORY_FILE" 2>/dev/null
+    echo "$mac|$name|$timestamp" >> "$HISTORY_FILE"
+    print_info "✓ 已记录连接历史: $name [$mac]"
+}
+
+# ============================================================
+# 新增: 获取历史设备列表 (按时间倒序)
+# ============================================================
+get_history_devices() {
+    [[ ! -f "$HISTORY_FILE" ]] && return
+    
+    # 按时间戳排序(最近的在前)
+    sort -t'|' -k3 -rn "$HISTORY_FILE" | while IFS='|' read -r mac name timestamp; do
+        # 验证设备是否已配对
+        if bluetoothctl devices Paired | grep -q "$mac"; then
+            echo "$mac|$name"
+        fi
+    done
+}
+
+# ============================================================
 # 1. 安装所有必需组件
 # ============================================================
 install_packages() {
     print_info "安装蓝牙音频组件..."
-    
     apt update
     apt install -y \
         bluez \
         bluez-tools \
         pulseaudio \
         pulseaudio-module-bluetooth \
+        pulseaudio-utils \
+        alsa-utils \
+        ffmpeg \
         || { print_error "安装失败"; exit 1; }
-    
     print_info "✓ 安装完成"
 }
 
@@ -47,6 +103,38 @@ configure_pulseaudio() {
     # 确保pulse用户存在
     id pulse &>/dev/null || useradd -r -d /var/run/pulse pulse
     usermod -aG audio,bluetooth pulse
+    
+    # 创建 ALSA 配置文件 (让 ALSA 通过 PulseAudio 工作)
+    print_info "配置 ALSA → PulseAudio 桥接..."
+    cat > /etc/asound.conf << 'ALSA_EOF'
+# ALSA 配置: 将所有音频输出路由到 PulseAudio
+pcm.!default {
+    type pulse
+    fallback "sysdefault"
+    hint {
+        show on
+        description "Default ALSA Output (via PulseAudio)"
+    }
+}
+
+ctl.!default {
+    type pulse
+    fallback "sysdefault"
+}
+
+# 备用设备
+pcm.sysdefault {
+    type hw
+    card 0
+}
+
+ctl.sysdefault {
+    type hw
+    card 0
+}
+ALSA_EOF
+    
+    print_info "✓ ALSA 配置完成: /etc/asound.conf"
     
     # 创建系统模式配置文件 (必须在此预加载蓝牙模块)
     mkdir -p "$CONFIG_DIR"
@@ -66,12 +154,10 @@ load-module module-suspend-on-idle
 
 # 蓝牙模块 (核心 - 必须预加载)
 load-module module-bluetooth-discover
-load-module module-bluetooth-policy
-
-# 自动切换到蓝牙设备
+load-module module-bluetooth-policy  # 自动切换到蓝牙设备
 load-module module-switch-on-connect
 EOF
-    
+
     print_info "✓ 系统模式配置完成: $SYSTEM_PA"
 }
 
@@ -101,14 +187,33 @@ start_pulseaudio() {
 }
 
 # ============================================================
-# 4. 创建开机自启服务
+# 新增: 重启 PulseAudio 服务 (连接后稳定性处理)
+# ============================================================
+restart_pulseaudio() {
+    print_info "重启 PulseAudio 服务 (稳定性处理)..."
+    pkill -9 pulseaudio
+    sleep 1
+    pulseaudio --system -D --disallow-exit
+    sleep 2
+    
+    if pactl info &>/dev/null; then
+        print_info "✓ PulseAudio 重启成功"
+        return 0
+    else
+        print_error "PulseAudio 重启失败"
+        return 1
+    fi
+}
+
+# ============================================================
+# 4. 创建开机自启服务 (改进版)
 # ============================================================
 create_service() {
     print_info "创建开机自启服务..."
     
     cat > "$SERVICE_FILE" << EOF
 [Unit]
-Description=蓝牙音箱自动连接服务
+Description=蓝牙音箱自动连接服务 (智能模式)
 After=bluetooth.service pulseaudio.service
 Requires=bluetooth.service
 
@@ -122,34 +227,146 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-    
-    # 创建自动连接脚本
+
+    # 创建自动连接脚本 (改进版)
     cat > /usr/local/bin/bt-auto-connect.sh << 'SCRIPT'
 #!/bin/bash
-MAC_FILE="/etc/bluetooth/.bt_device"
-BT_MAC=$(cat "$MAC_FILE" 2>/dev/null)
+# 智能蓝牙连接脚本
+# 流程: 主动连接历史设备(1分钟) → 被动配对模式(一直保持)
 
-[[ -z "$BT_MAC" ]] && exit 0
+HISTORY_FILE="/etc/bluetooth/.bt_history"
+LOG_FILE="/var/log/bt-auto-connect.log"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+play_beep() {
+    speaker-test -t sine -f 800 -c 1 -l 1 -p 20000 &>/dev/null &
+    sleep 0.3
+    pkill -9 speaker-test 2>/dev/null
+}
+
+restart_pulseaudio() {
+    log "重启 PulseAudio 服务..."
+    pkill -9 pulseaudio
+    sleep 1
+    pulseaudio --system -D --disallow-exit
+    sleep 2
+}
 
 # 确保 PulseAudio 系统模式运行
 pgrep -f "pulseaudio --system" || pulseaudio --system -D --disallow-exit
 sleep 3
 
-# 循环尝试连接
-for i in {1..5}; do
-    echo "[$(date)] 尝试连接 $BT_MAC (第${i}次)..."
-    bluetoothctl connect "$BT_MAC" && break
-    sleep 5
-done
+# 设置环境变量 (让所有音频工具使用 PulseAudio)
+export PULSE_SERVER=unix:/var/run/pulse/native
 
-# 设置为默认输出
-sleep 2
-SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
-[[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+# ========== 阶段1: 主动连接历史设备 (60秒) ==========
+log "=== 阶段1: 主动搜寻历史设备 ==="
+
+if [[ -f "$HISTORY_FILE" ]]; then
+    # 按时间倒序读取历史设备
+    DEVICES=$(sort -t'|' -k3 -rn "$HISTORY_FILE" | while IFS='|' read -r mac name timestamp; do
+        if bluetoothctl devices Paired | grep -q "$mac"; then
+            echo "$mac|$name"
+        fi
+    done)
+    
+    if [[ -n "$DEVICES" ]]; then
+        TIMEOUT=$(($(date +%s) + 60))  # 1分钟超时
+        
+        while IFS='|' read -r mac name; do
+            log "尝试连接: $name [$mac]"
+            
+            # 尝试连接3次
+            for attempt in {1..3}; do
+                if bluetoothctl connect "$mac" 2>&1 | grep -q "Connection successful"; then
+                    log "✓ 连接成功: $name"
+                    sleep 2
+                    
+                    # 第一次提示音
+                    play_beep
+                    
+                    # 设置为默认输出
+                    SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+                    if [[ -n "$SINK" ]]; then
+                        pactl set-default-sink "$SINK"
+                        log "✓ 已设为默认音频输出: $SINK"
+                    fi
+                    
+                    # 重启 PulseAudio
+                    restart_pulseaudio
+                    
+                    # 重新设置默认输出
+                    SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+                    [[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+                    
+                    # 第二次提示音
+                    sleep 1
+                    play_beep
+                    
+                    log "=== 连接流程完成 ==="
+                    exit 0
+                fi
+                
+                # 检查超时
+                [[ $(date +%s) -ge $TIMEOUT ]] && break 2
+                sleep 5
+            done
+            
+            # 检查超时
+            [[ $(date +%s) -ge $TIMEOUT ]] && break
+        done <<< "$DEVICES"
+    else
+        log "无可用的历史设备"
+    fi
+else
+    log "无历史记录文件"
+fi
+
+# ========== 阶段2: 被动配对模式 (一直保持) ==========
+log "=== 阶段2: 切换为被动配对模式 ==="
+bluetoothctl discoverable on
+bluetoothctl pairable on
+log "✓ 蓝牙设备现在可被发现和配对"
+
+# 监听连接事件 (使用 bluetoothctl 监控)
+log "等待外部设备连接..."
+bluetoothctl | while read -r line; do
+    if echo "$line" | grep -q "Device.*Connected: yes"; then
+        MAC=$(echo "$line" | grep -oP 'Device \K[0-9A-F:]+')
+        log "检测到设备连接: $MAC"
+        
+        sleep 3
+        
+        # 第一次提示音
+        play_beep
+        
+        # 设置为默认输出
+        SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+        if [[ -n "$SINK" ]]; then
+            pactl set-default-sink "$SINK"
+            log "✓ 已设为默认音频输出"
+        fi
+        
+        # 重启 PulseAudio
+        restart_pulseaudio
+        
+        # 重新设置默认输出
+        SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+        [[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+        
+        # 第二次提示音
+        sleep 1
+        play_beep
+        
+        log "=== 被动连接流程完成 ==="
+    fi
+done
 SCRIPT
-    
+
     chmod +x /usr/local/bin/bt-auto-connect.sh
-    
     systemctl daemon-reload
     systemctl enable bt-audio-manager.service
     
@@ -165,14 +382,12 @@ scan_devices() {
     # 启动扫描
     timeout 10 bluetoothctl scan on &>/dev/null &
     local scan_pid=$!
-    
     sleep 10
     kill $scan_pid 2>/dev/null
     
     # 获取设备列表
     print_info "发现的设备:"
     echo "════════════════════════════════════════════════════"
-    
     local devices=()
     local index=1
     
@@ -205,7 +420,6 @@ scan_devices() {
         local selected="${devices[$((choice-1))]}"
         local mac="${selected%%|*}"
         local name="${selected#*|}"
-        
         print_info "已选择: $name [$mac]"
         connect_device "$mac" "$name"
     else
@@ -215,7 +429,7 @@ scan_devices() {
 }
 
 # ============================================================
-# 6. 手动连接蓝牙设备
+# 6. 手动连接蓝牙设备 (改进版)
 # ============================================================
 connect_device() {
     local mac="$1"
@@ -233,12 +447,14 @@ connect_device() {
     bluetoothctl pair "$mac" 2>/dev/null
     sleep 1
     bluetoothctl connect "$mac"
-    
     sleep 3
     
     # 检查连接状态
     if bluetoothctl info "$mac" | grep -q "Connected: yes"; then
         print_info "✓ 连接成功: $name"
+        
+        # 第一次提示音
+        play_beep
         
         # 设置为默认输出
         SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
@@ -247,9 +463,23 @@ connect_device() {
             print_info "✓ 已设为默认音频输出"
         fi
         
+        # 重启 PulseAudio
+        restart_pulseaudio
+        
+        # 重新设置默认输出
+        SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+        [[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+        
+        # 第二次提示音
+        sleep 1
+        play_beep
+        
         # 保存MAC地址和名称
         echo "$mac" > "$MAC_FILE"
         echo "$name" > "${MAC_FILE}.name"
+        
+        # 记录连接历史
+        record_connection "$mac" "$name"
         
         # 提示开启自动连接
         echo ""
@@ -269,6 +499,77 @@ connect_device() {
 }
 
 # ============================================================
+# 新增: 快速播放测试 (输入MAC → 连接 → 播放)
+# ============================================================
+quick_test() {
+    echo -n "输入蓝牙设备MAC地址: "
+    read -r mac
+    
+    if [[ -z "$mac" ]]; then
+        print_error "MAC地址不能为空"
+        return 1
+    fi
+    
+    # 检查是否为历史设备
+    local name="未知设备"
+    if [[ -f "$HISTORY_FILE" ]]; then
+        name=$(grep "^$mac|" "$HISTORY_FILE" | cut -d'|' -f2)
+        [[ -z "$name" ]] && name="未知设备"
+    fi
+    
+    print_info "快速测试: $name [$mac]"
+    
+    # 连接设备
+    print_info "正在连接..."
+    systemctl restart bluetooth &>/dev/null
+    start_pulseaudio &>/dev/null
+    sleep 2
+    
+    bluetoothctl trust "$mac" &>/dev/null
+    bluetoothctl pair "$mac" &>/dev/null
+    bluetoothctl connect "$mac"
+    sleep 3
+    
+    # 检查连接
+    if ! bluetoothctl info "$mac" | grep -q "Connected: yes"; then
+        print_error "连接失败"
+        return 1
+    fi
+    
+    print_info "✓ 连接成功"
+    
+    # 第一次提示音
+    play_beep
+    
+    # 设置默认输出
+    SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+    if [[ -n "$SINK" ]]; then
+        pactl set-default-sink "$SINK"
+        print_info "✓ 已设为默认音频输出"
+    fi
+    
+    # 重启 PulseAudio
+    restart_pulseaudio
+    
+    # 重新设置默认输出
+    SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+    [[ -n "$SINK" ]] && pactl set-default-sink "$SINK"
+    
+    # 第二次提示音
+    sleep 1
+    play_beep
+    
+    # 播放测试音 (5秒)
+    print_info "播放测试音 (5秒)..."
+    speaker-test -t wav -c 2 -l 1
+    
+    # 记录历史
+    record_connection "$mac" "$name"
+    
+    print_info "✓ 测试完成"
+}
+
+# ============================================================
 # 7. 测试音频播放
 # ============================================================
 test_audio() {
@@ -283,12 +584,12 @@ show_status() {
     echo "════════════════════════════════════════"
     echo "PulseAudio 状态:"
     pactl info 2>/dev/null | grep -E "Server Name|Server Version" || echo "未运行"
-    
     echo ""
+    
     echo "音频设备列表:"
     pactl list sinks short
-    
     echo ""
+    
     echo "当前连接的蓝牙设备:"
     if [[ -f "$MAC_FILE" ]]; then
         MAC=$(cat "$MAC_FILE")
@@ -298,21 +599,47 @@ show_status() {
     else
         echo "无已保存设备"
     fi
-    
     echo ""
+    
+    echo "连接历史 (最近5条):"
+    if [[ -f "$HISTORY_FILE" ]]; then
+        sort -t'|' -k3 -rn "$HISTORY_FILE" | head -5 | while IFS='|' read -r mac name timestamp; do
+            local date_str=$(date -d "@$timestamp" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "未知时间")
+            printf "  %-17s %-20s [%s]\n" "$mac" "$name" "$date_str"
+        done
+    else
+        echo "  无历史记录"
+    fi
+    echo ""
+    
     echo "自启服务状态:"
     systemctl status bt-audio-manager.service --no-pager -l | head -10
     echo "════════════════════════════════════════"
 }
 
 # ============================================================
-# 菜单
+# 新增: 查看自动连接日志
+# ============================================================
+show_logs() {
+    local log_file="/var/log/bt-auto-connect.log"
+    if [[ -f "$log_file" ]]; then
+        print_info "自动连接日志 (最近20行):"
+        echo "════════════════════════════════════════"
+        tail -20 "$log_file"
+        echo "════════════════════════════════════════"
+    else
+        print_warn "暂无日志文件"
+    fi
+}
+
+# ============================================================
+# 菜单 (改进版)
 # ============================================================
 show_menu() {
     clear
     echo "════════════════════════════════════════════════════"
-    echo "      Armbian N1 蓝牙音箱管理脚本"
-    echo "      模式: PulseAudio 系统模式 (--system)"
+    echo "     Armbian N1 蓝牙音箱管理脚本 (改进版)"
+    echo "     模式: PulseAudio 系统模式 + 智能连接"
     echo "════════════════════════════════════════════════════"
     echo "1. 完整安装 (安装组件 + 配置系统模式 + 开机自启)"
     echo "2. 扫描并连接蓝牙设备 (带编号选择)"
@@ -322,6 +649,8 @@ show_menu() {
     echo "6. 查看状态"
     echo "7. 重启服务"
     echo "8. 开启/关闭自动连接"
+    echo "9. ${GREEN}快速播放测试 (输入MAC → 连接 → 播放)${NC}"
+    echo "10. 查看自动连接日志"
     echo "0. 退出"
     echo "════════════════════════════════════════════════════"
     echo -n "请选择: "
@@ -333,6 +662,10 @@ show_menu() {
 main() {
     # 检查root权限
     [[ $EUID -ne 0 ]] && { print_error "需要root权限"; exit 1; }
+    
+    # 创建历史记录文件
+    mkdir -p "$(dirname "$HISTORY_FILE")"
+    touch "$HISTORY_FILE"
     
     while true; do
         show_menu
@@ -379,6 +712,12 @@ main() {
                     systemctl enable bt-audio-manager.service
                     print_info "✓ 已开启自动连接"
                 fi
+                ;;
+            9)
+                quick_test
+                ;;
+            10)
+                show_logs
                 ;;
             0)
                 exit 0

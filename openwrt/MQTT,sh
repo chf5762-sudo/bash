@@ -1,0 +1,168 @@
+mkdir -p /www/cgi-bin
+
+cat > /www/cgi-bin/bemfa.sh << 'CGI_END'
+#!/bin/sh
+echo "Content-type: text/html; charset=utf-8"
+echo ""
+
+SCRIPT="/usr/bin/bemfa_mqtt.sh"
+LOG_FILE="/tmp/bemfa_messages.log"
+SUBSCRIBE_LOG="/tmp/bemfa_subscribe.log"
+
+if [ "$REQUEST_METHOD" = "POST" ]; then
+    read -n $CONTENT_LENGTH POST_DATA
+    ACTION=$(echo "$POST_DATA" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+    MESSAGE=$(echo "$POST_DATA" | sed -n 's/.*message=\([^&]*\).*/\1/p' | sed 's/+/ /g' | sed 's/%\([0-9A-F][0-9A-F]\)/\\x\1/g')
+    MESSAGE=$(printf "$MESSAGE")
+    
+    case "$ACTION" in
+        start) $SCRIPT start >/dev/null 2>&1 ;;
+        stop) $SCRIPT stop >/dev/null 2>&1 ;;
+        restart) $SCRIPT restart >/dev/null 2>&1 ;;
+        send) [ -n "$MESSAGE" ] && $SCRIPT send "$MESSAGE" >/dev/null 2>&1 ;;
+        clear) $SCRIPT clear >/dev/null 2>&1 ;;
+    esac
+    
+    echo "<script>window.location.href='/cgi-bin/bemfa.sh';</script>"
+    exit 0
+fi
+
+STATUS="未运行"
+STATUS_COLOR="#ef4444"
+if $SCRIPT status >/dev/null 2>&1; then
+    STATUS="运行中"
+    STATUS_COLOR="#10b981"
+fi
+
+# 读取发送消息历史（只显示[发送]的）
+SEND_MESSAGES="<div class='empty'>暂无发送记录</div>"
+if [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+    SEND_MESSAGES=$(grep "\[发送\]" "$LOG_FILE" | tail -n 50 | sed '1!G;h;$!d' | sed 's/</\&lt;/g;s/>/\&gt;/g' | while IFS= read -r line; do
+        if [ -n "$line" ]; then
+            # 提取时间和消息内容，去掉[发送] ppt001部分
+            CLEAN_LINE=$(echo "$line" | sed 's/\[发送\] ppt001 //')
+            echo "<div class='message'>$CLEAN_LINE</div>"
+        fi
+    done)
+    [ -z "$SEND_MESSAGES" ] && SEND_MESSAGES="<div class='empty'>暂无发送记录</div>"
+fi
+
+# 读取接收消息（只显示不含[发送]的）
+SUBSCRIBE_MESSAGES="<div class='empty'>暂无接收消息</div>"
+if [ -f "$SUBSCRIBE_LOG" ] && [ -s "$SUBSCRIBE_LOG" ]; then
+    SUBSCRIBE_MESSAGES=$(tail -n 50 "$SUBSCRIBE_LOG" | sed '1!G;h;$!d' | sed 's/</\&lt;/g;s/>/\&gt;/g' | while IFS= read -r line; do
+        if [ -n "$line" ]; then
+            # 去掉主题名ppt001，只保留时间和内容
+            CLEAN_LINE=$(echo "$line" | sed 's/ ppt001 / /')
+            echo "<div class='subscribe-message'>$CLEAN_LINE</div>"
+        fi
+    done)
+    [ -z "$SUBSCRIBE_MESSAGES" ] && SUBSCRIBE_MESSAGES="<div class='empty'>暂无接收消息</div>"
+fi
+
+cat <<'HTML_END'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>巴法云MQTT客户端</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 24px; }
+        .status { padding: 6px 12px; border-radius: 20px; font-size: 14px; }
+        .content { padding: 20px; }
+        .info { background: #f3f4f6; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 14px; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: all 0.3s; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5568d3; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-secondary { background: #6b7280; color: white; }
+        .btn-secondary:hover { background: #4b5563; }
+        .send-form { display: flex; gap: 10px; margin-bottom: 20px; }
+        .send-form input { flex: 1; padding: 10px; border: 2px solid #e5e7eb; border-radius: 6px; font-size: 14px; }
+        .send-form input:focus { outline: none; border-color: #667eea; }
+        .messages-title { font-size: 18px; margin-bottom: 10px; color: #374151; }
+        .messages-container { display: flex; gap: 15px; margin-bottom: 20px; }
+        .messages-box { flex: 1; }
+        .messages { border: 2px solid #e5e7eb; border-radius: 6px; max-height: 400px; overflow-y: auto; padding: 10px; background: #fafafa; }
+        .message { padding: 6px 10px; margin-bottom: 6px; background: white; border-left: 3px solid #667eea; border-radius: 4px; font-size: 12px; font-family: monospace; word-wrap: break-word; }
+        .subscribe-message { padding: 6px 10px; margin-bottom: 6px; background: white; border-left: 3px solid #10b981; border-radius: 4px; font-size: 12px; font-family: monospace; word-wrap: break-word; }
+        .empty { text-align: center; padding: 40px; color: #9ca3af; font-size: 14px; }
+        @media (max-width: 768px) { .controls { flex-direction: column; } .btn { width: 100%; } .messages-container { flex-direction: column; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 巴法云MQTT客户端</h1>
+HTML_END
+
+echo "            <div class=\"status\" style=\"background: $STATUS_COLOR;\">● $STATUS</div>"
+
+cat <<'HTML_END'
+        </div>
+        <div class="content">
+            <div class="info"><strong>主题:</strong> ppt001 | <strong>服务器:</strong> bemfa.com:9501</div>
+            <div class="controls">
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="start">
+                    <button type="submit" class="btn btn-primary">▶ 启动</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="stop">
+                    <button type="submit" class="btn btn-danger">■ 停止</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="restart">
+                    <button type="submit" class="btn btn-secondary">↻ 重启</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="clear">
+                    <button type="submit" class="btn btn-secondary" onclick="return confirm('确定清空?');">🗑 清空</button>
+                </form>
+            </div>
+            <h3 class="messages-title">📤 发送消息</h3>
+            <form method="POST" class="send-form">
+                <input type="hidden" name="action" value="send">
+                <input type="text" name="message" placeholder="输入要发送的消息..." required>
+                <button type="submit" class="btn btn-primary">发送</button>
+            </form>
+            <div class="messages-container">
+                <div class="messages-box">
+                    <h3 class="messages-title">📤 发送历史 (最新50条)</h3>
+HTML_END
+
+echo "                    <div class=\"messages\">$SEND_MESSAGES</div>"
+
+cat <<'HTML_END'
+                </div>
+                <div class="messages-box">
+                    <h3 class="messages-title">📥 接收消息 (最新50条)</h3>
+HTML_END
+
+echo "                    <div class=\"messages\">$SUBSCRIBE_MESSAGES</div>"
+
+cat <<'HTML_END'
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>setTimeout(function(){ window.location.reload(); }, 10000);</script>
+</body>
+</html>
+HTML_END
+CGI_END
+
+chmod +x /www/cgi-bin/bemfa.sh
+
+echo ""
+echo "✅ Web界面安装完成!"
+echo ""
+echo "📱 访问地址: http://$(uci get network.lan.ipaddr 2>/dev/null || ip -4 addr show br-lan | grep -oP '(?<=inet\s)\d+(\.\d+){3}')/cgi-bin/bemfa.sh"
+echo ""

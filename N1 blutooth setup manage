@@ -1,79 +1,33 @@
 #!/bin/bash
-# Armbian N1 蓝牙音频一键整合脚本 (含自动重连功能)
-
-[[ $EUID -ne 0 ]] && echo "请使用 root 权限运行" && exit 1
-
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export HOME=/root
 LAST_DEVICE_FILE="/etc/last_bt_device"
 
-# --- 1. 启动 PulseAudio 系统模式 ---
-echo "步骤 1: 启动 PulseAudio 系统模式..."
+echo "--- 流程开始：重置音频与蓝牙环境 ---"
 pkill -9 pulseaudio
 rm -rf /var/run/pulse /root/.config/pulse
-sleep 1
+sleep 2
 pulseaudio --system -D --disallow-exit
+bluetoothctl power on >/dev/null 2>&1
 sleep 2
 
-# 激活蓝牙控制器
-bluetoothctl power on >/dev/null 2>&1
-
-# --- 2. 尝试自动连接上次设备 ---
 if [ -f "$LAST_DEVICE_FILE" ]; then
     TARGET_MAC=$(cat "$LAST_DEVICE_FILE")
-    echo "检测到历史设备: $TARGET_MAC，尝试自动连接..."
-    bluetoothctl connect "$TARGET_MAC" >/dev/null 2>&1
-    sleep 3
-fi
-
-# 检查是否已连接成功
-SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
-
-# --- 3. 手动模式 (若自动连接失败则触发) ---
-if [[ -z "$SINK" ]]; then
-    echo -e "\n未发现已连接设备，进入扫描模式..."
-    timeout 8 bluetoothctl scan on &>/dev/null &
-    sleep 8
-
-    echo "----------------------------------------------------"
-    devices=(); index=1
-    while IFS= read -r line; do
-        if [[ $line =~ Device\ ([0-9A-F:]+)\ (.+) ]]; then
-            mac="${BASH_REMATCH[1]}"; name="${BASH_REMATCH[2]}"
-            if [[ "$name" != "$mac" ]]; then
-                printf "[%d] 名称: %-20s MAC: %s\n" "$index" "$name" "$mac"
-                devices+=("$mac"); ((index++))
-            fi
-        fi
-    done < <(bluetoothctl devices)
-    echo "----------------------------------------------------"
-
-    read -p "请输入编号或手动输入 MAC: " input
-    if [[ "$input" =~ ^[0-9]+$ ]] && [ "$input" -le "${#devices[@]}" ]; then
-        TARGET_MAC="${devices[$((input-1))]}"
-    elif [[ "$input" =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]]; then
-        TARGET_MAC="$input"
-    else
-        echo "无效输入"; exit 1
-    fi
-
-    echo "正在尝试连接: $TARGET_MAC ..."
+    echo "尝试连接历史设备: $TARGET_MAC"
     bluetoothctl trust "$TARGET_MAC" >/dev/null 2>&1
-    bluetoothctl pair "$TARGET_MAC" >/dev/null 2>&1
-    bluetoothctl connect "$TARGET_MAC"
-    sleep 3
-    
-    SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
+    bluetoothctl connect "$TARGET_MAC" >/dev/null 2>&1
+    sleep 5
 fi
 
-# --- 4. 最终检查与测试 ---
+SINK=$(pactl list sinks short | grep bluez | awk '{print $2}')
 if [[ -n "$SINK" ]]; then
     pactl set-default-sink "$SINK"
-    echo "$TARGET_MAC" > "$LAST_DEVICE_FILE" # 保存成功连接的MAC
+    echo "$TARGET_MAC" > "$LAST_DEVICE_FILE"
     echo "✓ 连接成功: $SINK"
-    echo "开始音频测试..."
-    speaker-test -t wav -c 2 -l 1
+    # 增加这一行进行音频测试
+    speaker-test -t wav -c 2 -l 1 >/dev/null 2>&1
+    exit 0
 else
-    echo "✗ 连接失败，请检查设备状态。"
+    echo "✗ 连接失败，触发重试..."
     exit 1
 fi
-
-echo -e "\n流程执行完毕！"

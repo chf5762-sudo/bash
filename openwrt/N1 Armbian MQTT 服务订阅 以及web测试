@@ -1,0 +1,917 @@
+#!/bin/bash
+
+echo "=========================================="
+echo "  巴法云MQTT客户端 - 单文件部署脚本"
+echo "  支持多主题订阅 + JSON格式 + Web管理"
+echo "=========================================="
+echo ""
+
+INSTALL_DIR="/root/mqtt"
+LOG_DIR="$INSTALL_DIR/logs"
+
+# 检查依赖
+check_dependencies() {
+    echo "🔍 检查系统依赖..."
+    
+    if ! command -v mosquitto_sub >/dev/null 2>&1; then
+        echo "❌ mosquitto_sub 未安装"
+        echo "   请先安装: apt-get install mosquitto-clients"
+        exit 1
+    fi
+    
+    if ! command -v mpg123 >/dev/null 2>&1; then
+        echo "⚠️  mpg123 未安装（可选，用于音乐播放）"
+        echo "   安装命令: apt-get install mpg123"
+    fi
+    
+    echo "✅ 依赖检查完成"
+}
+
+# 创建目录
+create_directories() {
+    echo ""
+    echo "📁 创建安装目录..."
+    mkdir -p "$INSTALL_DIR"
+    mkdir -p "$LOG_DIR"
+    echo "✅ 目录创建完成: $INSTALL_DIR"
+}
+
+# 创建配置文件
+create_config() {
+    echo ""
+    echo "⚙️  创建配置文件..."
+    
+    cat > "$INSTALL_DIR/bemfa_config.conf" << 'EOF'
+# 巴法云MQTT配置文件
+
+# MQTT服务器配置
+PRIVATE_KEY="3eb42d69d8b226abe22024d648975f8a"
+MQTT_HOST="bemfa.com"
+MQTT_PORT="9501"
+
+# 主题列表（每行一个，支持多个主题）
+# 格式: TOPICS="主题1 主题2 主题3"
+TOPICS="ppt001 ppt002 music001"
+
+# 日志配置
+MAX_LOG_LINES=100
+
+# 播放器配置
+PLAYER_CMD="mpg123"
+VOLUME=80
+EOF
+
+    echo "✅ 配置文件创建完成: $INSTALL_DIR/bemfa_config.conf"
+}
+
+# 创建MQTT订阅脚本
+create_mqtt_script() {
+    echo ""
+    echo "📝 创建MQTT订阅脚本..."
+    
+    cat > "$INSTALL_DIR/bemfa_mqtt.sh" << 'EOF'
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/bemfa_config.conf"
+LOG_DIR="$SCRIPT_DIR/logs"
+PID_FILE="$LOG_DIR/bemfa_mqtt.pid"
+LOG_FILE="$LOG_DIR/messages.log"
+SUBSCRIBE_LOG="$LOG_DIR/subscribe.log"
+PLAYER_SCRIPT="$SCRIPT_DIR/bemfa_player.sh"
+
+# 加载配置
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+else
+    echo "❌ 配置文件不存在: $CONFIG_FILE"
+    exit 1
+fi
+
+# 检查是否运行
+is_running() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 启动服务
+start() {
+    if is_running; then
+        echo "✓ 服务已在运行 (PID: $(cat $PID_FILE))"
+        return 0
+    fi
+    
+    echo "🚀 启动巴法云MQTT订阅服务..."
+    echo "   主题列表: $TOPICS"
+    
+    # 确保日志目录存在
+    mkdir -p "$LOG_DIR"
+    touch "$LOG_FILE"
+    touch "$SUBSCRIBE_LOG"
+    
+    # 为每个主题启动订阅进程
+    for TOPIC in $TOPICS; do
+        echo "   订阅主题: $TOPIC"
+        
+        (
+            while true; do
+                mosquitto_sub -h "$MQTT_HOST" -p "$MQTT_PORT" \
+                    -i "$PRIVATE_KEY" -t "$TOPIC" -v 2>&1 | \
+                while IFS= read -r line; do
+                    TIMESTAMP="[$(date '+%Y-%m-%d %H:%M:%S')]"
+                    
+                    # 记录到总日志
+                    echo "$TIMESTAMP $line" >> "$LOG_FILE"
+                    tail -n "$MAX_LOG_LINES" "$LOG_FILE" > "${LOG_FILE}.tmp" && mv "${LOG_FILE}.tmp" "$LOG_FILE"
+                    
+                    # 记录到订阅日志
+                    echo "$TIMESTAMP $line" >> "$SUBSCRIBE_LOG"
+                    tail -n "$MAX_LOG_LINES" "$SUBSCRIBE_LOG" > "${SUBSCRIBE_LOG}.tmp" && mv "${SUBSCRIBE_LOG}.tmp" "$SUBSCRIBE_LOG"
+                    
+                    # 处理消息
+                    MSG=$(echo "$line" | cut -d' ' -f2-)
+                    
+                    # 调用播放器脚本处理
+                    if [ -x "$PLAYER_SCRIPT" ]; then
+                        echo "$MSG" | "$PLAYER_SCRIPT" "$TOPIC" >> "$LOG_DIR/player.log" 2>&1 &
+                    fi
+                done
+                
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] 连接断开($TOPIC),5秒后重连..." >> "$LOG_FILE"
+                sleep 5
+            done
+        ) &
+    done
+    
+    # 保存主进程PID
+    echo $$ > "$PID_FILE"
+    
+    sleep 2
+    
+    if is_running; then
+        echo "✅ 启动成功!"
+        echo "   PID文件: $PID_FILE"
+        echo "   日志文件: $LOG_FILE"
+    else
+        echo "❌ 启动失败"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+}
+
+# 停止服务
+stop() {
+    if ! is_running; then
+        echo "✗ 服务未运行"
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    
+    echo "⏹️  停止巴法云MQTT订阅服务..."
+    
+    # 杀死所有mosquitto_sub进程
+    pkill -f "mosquitto_sub.*$MQTT_HOST"
+    
+    # 删除PID文件
+    rm -f "$PID_FILE"
+    
+    sleep 1
+    
+    if is_running; then
+        echo "❌ 停止失败，强制结束..."
+        pkill -9 -f "mosquitto_sub.*$MQTT_HOST"
+    else
+        echo "✅ 已停止"
+    fi
+}
+
+# 查看状态
+status() {
+    echo "=========================================="
+    echo "  巴法云MQTT服务状态"
+    echo "=========================================="
+    
+    if is_running; then
+        echo "状态: ✅ 运行中"
+        echo "PID: $(cat $PID_FILE)"
+    else
+        echo "状态: ❌ 未运行"
+        rm -f "$PID_FILE"
+    fi
+    
+    echo ""
+    echo "配置信息:"
+    echo "  服务器: $MQTT_HOST:$MQTT_PORT"
+    echo "  主题列表: $TOPICS"
+    
+    if [ -f "$LOG_FILE" ]; then
+        MSG_COUNT=$(wc -l < "$LOG_FILE")
+        echo "  消息总数: $MSG_COUNT"
+    fi
+    
+    if [ -f "$SUBSCRIBE_LOG" ]; then
+        SUB_COUNT=$(wc -l < "$SUBSCRIBE_LOG")
+        echo "  接收消息: $SUB_COUNT"
+    fi
+    
+    echo ""
+    echo "活跃订阅:"
+    pgrep -af "mosquitto_sub.*$MQTT_HOST" | while read line; do
+        echo "  $line"
+    done
+}
+
+# 发送消息
+send() {
+    if [ -z "$1" ] || [ -z "$2" ]; then
+        echo "用法: $0 send <主题> <消息内容>"
+        echo "示例: $0 send ppt001 'Hello World'"
+        return 1
+    fi
+    
+    TOPIC="$1"
+    MESSAGE="$2"
+    
+    echo "📤 发送消息到主题: $TOPIC"
+    echo "   内容: $MESSAGE"
+    
+    mosquitto_pub -h "$MQTT_HOST" -p "$MQTT_PORT" \
+        -i "$PRIVATE_KEY" -t "$TOPIC" -m "$MESSAGE"
+    
+    if [ $? -eq 0 ]; then
+        echo "✅ 发送成功"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [发送] $TOPIC $MESSAGE" >> "$LOG_FILE"
+    else
+        echo "❌ 发送失败"
+        return 1
+    fi
+}
+
+# 查看日志
+show_log() {
+    if [ -f "$LOG_FILE" ]; then
+        echo "=========================================="
+        echo "  消息日志 (最新50条)"
+        echo "=========================================="
+        tail -n 50 "$LOG_FILE"
+    else
+        echo "日志文件不存在"
+    fi
+}
+
+# 清空日志
+clear_log() {
+    > "$LOG_FILE"
+    > "$SUBSCRIBE_LOG"
+    > "$LOG_DIR/player.log"
+    echo "✅ 所有日志已清空"
+}
+
+# 主程序
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        sleep 2
+        start
+        ;;
+    status)
+        status
+        ;;
+    send)
+        send "$2" "$3"
+        ;;
+    log)
+        show_log
+        ;;
+    clear)
+        clear_log
+        ;;
+    *)
+        echo "巴法云MQTT客户端管理脚本"
+        echo ""
+        echo "用法: $0 {start|stop|restart|status|send|log|clear}"
+        echo ""
+        echo "命令:"
+        echo "  start              启动MQTT订阅服务"
+        echo "  stop               停止MQTT订阅服务"
+        echo "  restart            重启MQTT订阅服务"
+        echo "  status             查看运行状态"
+        echo "  send <主题> <消息>  发送消息"
+        echo "  log                查看消息日志"
+        echo "  clear              清空所有日志"
+        echo ""
+        echo "示例:"
+        echo "  $0 send ppt001 'PLAYLIST:http://music.mp3'"
+        echo "  $0 send ppt001 'CMD:PAUSE'"
+        exit 1
+        ;;
+esac
+EOF
+
+    chmod +x "$INSTALL_DIR/bemfa_mqtt.sh"
+    echo "✅ MQTT脚本创建完成"
+}
+
+# 创建播放器处理脚本
+create_player_script() {
+    echo ""
+    echo "🎵 创建播放器处理脚本..."
+    
+    cat > "$INSTALL_DIR/bemfa_player.sh" << 'EOF'
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/bemfa_config.conf"
+PLAYER_LOG="$SCRIPT_DIR/logs/player.log"
+PLAYLIST_FILE="/tmp/bemfa_playlist.m3u"
+PLAYER_PID_FILE="/tmp/bemfa_player.pid"
+
+# 加载配置
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+fi
+
+TOPIC="$1"
+
+# 读取消息内容
+read -r MESSAGE
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$TOPIC] $1" >> "$PLAYER_LOG"
+}
+
+# 检查播放器是否运行
+is_player_running() {
+    if [ -f "$PLAYER_PID_FILE" ]; then
+        PID=$(cat "$PLAYER_PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 停止播放器
+stop_player() {
+    if [ -f "$PLAYER_PID_FILE" ]; then
+        PID=$(cat "$PLAYER_PID_FILE")
+        kill "$PID" 2>/dev/null
+        rm -f "$PLAYER_PID_FILE"
+    fi
+    pkill -f "mpg123.*bemfa_playlist"
+}
+
+# 解析JSON格式
+parse_json() {
+    local json="$1"
+    
+    # 简单的JSON解析（使用grep和sed）
+    if echo "$json" | grep -q '"cmd"'; then
+        CMD=$(echo "$json" | grep -o '"cmd":"[^"]*"' | cut -d'"' -f4)
+        
+        case "$CMD" in
+            PLAYLIST)
+                # 提取URLs数组
+                URLS=$(echo "$json" | grep -o '"urls":\[.*\]' | sed 's/"urls":\[//;s/\]//;s/"//g' | tr ',' '\n')
+                log "JSON格式播放列表: $(echo $URLS | wc -w) 首"
+                
+                # 创建播放列表
+                > "$PLAYLIST_FILE"
+                for url in $URLS; do
+                    echo "$url" >> "$PLAYLIST_FILE"
+                done
+                
+                # 停止当前播放
+                stop_player
+                
+                # 开始播放
+                if command -v mpg123 >/dev/null 2>&1; then
+                    mpg123 -@ "$PLAYLIST_FILE" >/dev/null 2>&1 &
+                    echo $! > "$PLAYER_PID_FILE"
+                    log "开始播放 (PID: $!)"
+                fi
+                ;;
+                
+            CONTROL)
+                ACTION=$(echo "$json" | grep -o '"action":"[^"]*"' | cut -d'"' -f4)
+                handle_control "$ACTION"
+                ;;
+                
+            CUSTOM)
+                log "收到自定义JSON指令"
+                # 这里可以扩展自定义指令处理
+                ;;
+        esac
+        
+        return 0
+    fi
+    
+    return 1
+}
+
+# 处理控制指令
+handle_control() {
+    local cmd="$1"
+    
+    case "$cmd" in
+        PAUSE)
+            if is_player_running; then
+                kill -STOP $(cat "$PLAYER_PID_FILE") 2>/dev/null
+                log "暂停播放"
+            else
+                if [ -f "$PLAYER_PID_FILE" ]; then
+                    kill -CONT $(cat "$PLAYER_PID_FILE") 2>/dev/null
+                    log "继续播放"
+                fi
+            fi
+            ;;
+            
+        NEXT)
+            if is_player_running; then
+                kill -USR1 $(cat "$PLAYER_PID_FILE") 2>/dev/null
+                log "下一首"
+            fi
+            ;;
+            
+        PREV)
+            if is_player_running; then
+                kill -USR2 $(cat "$PLAYER_PID_FILE") 2>/dev/null
+                log "上一首"
+            fi
+            ;;
+            
+        STOP)
+            stop_player
+            log "停止播放"
+            ;;
+            
+        VOLUP)
+            # 音量控制需要amixer支持
+            if command -v amixer >/dev/null 2>&1; then
+                amixer set Master 5%+ >/dev/null 2>&1
+                log "音量+"
+            fi
+            ;;
+            
+        VOLDOWN)
+            if command -v amixer >/dev/null 2>&1; then
+                amixer set Master 5%- >/dev/null 2>&1
+                log "音量-"
+            fi
+            ;;
+    esac
+}
+
+# 主处理逻辑
+log "收到消息: $MESSAGE"
+
+# 尝试解析JSON
+if parse_json "$MESSAGE"; then
+    exit 0
+fi
+
+# 处理旧格式: PLAYLIST:url1|||url2|||url3
+if [[ "$MESSAGE" =~ ^PLAYLIST: ]]; then
+    URLS=$(echo "$MESSAGE" | sed 's/PLAYLIST://' | tr '|||' '\n')
+    log "旧格式播放列表: $(echo $URLS | wc -w) 首"
+    
+    # 创建播放列表
+    > "$PLAYLIST_FILE"
+    for url in $URLS; do
+        echo "$url" >> "$PLAYLIST_FILE"
+    done
+    
+    # 停止当前播放
+    stop_player
+    
+    # 开始播放
+    if command -v mpg123 >/dev/null 2>&1; then
+        mpg123 -@ "$PLAYLIST_FILE" >/dev/null 2>&1 &
+        echo $! > "$PLAYER_PID_FILE"
+        log "开始播放 (PID: $!)"
+    else
+        log "错误: mpg123 未安装"
+    fi
+    
+    exit 0
+fi
+
+# 处理旧格式: CMD:ACTION
+if [[ "$MESSAGE" =~ ^CMD: ]]; then
+    CMD=$(echo "$MESSAGE" | sed 's/CMD://')
+    log "旧格式控制指令: $CMD"
+    handle_control "$CMD"
+    exit 0
+fi
+
+# 其他消息
+log "未识别的消息格式"
+EOF
+
+    chmod +x "$INSTALL_DIR/bemfa_player.sh"
+    echo "✅ 播放器脚本创建完成"
+}
+
+# 创建Web管理界面
+create_web_interface() {
+    echo ""
+    echo "🌐 创建Web管理界面..."
+    
+    cat > "$INSTALL_DIR/web.sh" << 'EOF'
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/bemfa_config.conf"
+MQTT_SCRIPT="$SCRIPT_DIR/bemfa_mqtt.sh"
+LOG_FILE="$SCRIPT_DIR/logs/messages.log"
+SUBSCRIBE_LOG="$SCRIPT_DIR/logs/subscribe.log"
+WEB_PORT=8080
+WEB_PID="/tmp/bemfa_web.pid"
+
+# 加载配置
+if [ -f "$CONFIG_FILE" ]; then
+    source "$CONFIG_FILE"
+fi
+
+# 检查Web服务是否运行
+is_web_running() {
+    if [ -f "$WEB_PID" ]; then
+        PID=$(cat "$WEB_PID")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# 启动Web服务
+start_web() {
+    if is_web_running; then
+        echo "✓ Web服务已在运行 (端口: $WEB_PORT)"
+        return 0
+    fi
+    
+    echo "🌐 启动Web管理界面..."
+    echo "   访问地址: http://$(hostname -I | awk '{print $1}'):$WEB_PORT"
+    
+    # 使用busybox httpd
+    if command -v busybox >/dev/null 2>&1; then
+        # 创建临时CGI脚本
+        mkdir -p /tmp/bemfa_web
+        
+        cat > /tmp/bemfa_web/index.cgi << 'WEBCGI'
+#!/bin/bash
+
+echo "Content-type: text/html; charset=utf-8"
+echo ""
+
+SCRIPT_DIR="/root/mqtt"
+CONFIG_FILE="$SCRIPT_DIR/bemfa_config.conf"
+MQTT_SCRIPT="$SCRIPT_DIR/bemfa_mqtt.sh"
+LOG_FILE="$SCRIPT_DIR/logs/messages.log"
+SUBSCRIBE_LOG="$SCRIPT_DIR/logs/subscribe.log"
+
+# 加载配置
+source "$CONFIG_FILE" 2>/dev/null
+
+# 处理POST请求
+if [ "$REQUEST_METHOD" = "POST" ]; then
+    read -n $CONTENT_LENGTH POST_DATA
+    ACTION=$(echo "$POST_DATA" | sed -n 's/.*action=\([^&]*\).*/\1/p')
+    TOPIC=$(echo "$POST_DATA" | sed -n 's/.*topic=\([^&]*\).*/\1/p' | sed 's/+/ /g; s/%20/ /g')
+    MESSAGE=$(echo "$POST_DATA" | sed -n 's/.*message=\([^&]*\).*/\1/p' | sed 's/+/ /g')
+    MESSAGE=$(printf '%b' "${MESSAGE//%/\\x}")
+    
+    case "$ACTION" in
+        start) $MQTT_SCRIPT start >/dev/null 2>&1 ;;
+        stop) $MQTT_SCRIPT stop >/dev/null 2>&1 ;;
+        restart) $MQTT_SCRIPT restart >/dev/null 2>&1 ;;
+        send) [ -n "$MESSAGE" ] && [ -n "$TOPIC" ] && $MQTT_SCRIPT send "$TOPIC" "$MESSAGE" >/dev/null 2>&1 ;;
+        clear) $MQTT_SCRIPT clear >/dev/null 2>&1 ;;
+    esac
+    
+    echo "<script>window.location.href='/index.cgi';</script>"
+    exit 0
+fi
+
+# 检查服务状态
+STATUS="未运行"
+STATUS_COLOR="#ef4444"
+if $MQTT_SCRIPT status >/dev/null 2>&1; then
+    STATUS="运行中"
+    STATUS_COLOR="#10b981"
+fi
+
+# 读取日志
+SEND_MESSAGES="<div class='empty'>暂无发送记录</div>"
+if [ -f "$LOG_FILE" ]; then
+    SEND_MESSAGES=$(grep "\[发送\]" "$LOG_FILE" | tail -n 30 | tac | sed 's/</\&lt;/g;s/>/\&gt;/g' | while read line; do
+        [ -n "$line" ] && echo "<div class='message'>$line</div>"
+    done)
+    [ -z "$SEND_MESSAGES" ] && SEND_MESSAGES="<div class='empty'>暂无发送记录</div>"
+fi
+
+SUBSCRIBE_MESSAGES="<div class='empty'>暂无接收消息</div>"
+if [ -f "$SUBSCRIBE_LOG" ]; then
+    SUBSCRIBE_MESSAGES=$(tail -n 30 "$SUBSCRIBE_LOG" | tac | sed 's/</\&lt;/g;s/>/\&gt;/g' | while read line; do
+        [ -n "$line" ] && echo "<div class='subscribe-message'>$line</div>"
+    done)
+    [ -z "$SUBSCRIBE_MESSAGES" ] && SUBSCRIBE_MESSAGES="<div class='empty'>暂无接收消息</div>"
+fi
+
+# 生成主题选项
+TOPIC_OPTIONS=""
+for t in $TOPICS; do
+    TOPIC_OPTIONS="$TOPIC_OPTIONS<option value='$t'>$t</option>"
+done
+
+cat << 'HTML'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>巴法云MQTT管理</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 26px; }
+        .status { padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: 600; }
+        .content { padding: 25px; }
+        .info { background: #f0f4ff; padding: 15px; border-radius: 10px; margin-bottom: 20px; border-left: 4px solid #667eea; }
+        .info strong { color: #667eea; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .btn { padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; transition: all 0.3s; }
+        .btn-primary { background: #667eea; color: white; }
+        .btn-primary:hover { background: #5568d3; transform: translateY(-2px); }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; transform: translateY(-2px); }
+        .btn-secondary { background: #6b7280; color: white; }
+        .btn-secondary:hover { background: #4b5563; transform: translateY(-2px); }
+        .send-section { background: #f8f9fa; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .send-section h3 { margin-bottom: 15px; color: #333; }
+        .send-form { display: flex; flex-direction: column; gap: 12px; }
+        .form-row { display: flex; gap: 10px; align-items: center; }
+        .form-row label { min-width: 80px; font-weight: 600; color: #555; }
+        .send-form select, .send-form textarea { flex: 1; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; font-family: inherit; }
+        .send-form select:focus, .send-form textarea:focus { outline: none; border-color: #667eea; }
+        .send-form textarea { min-height: 80px; resize: vertical; }
+        .quick-cmds { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .quick-btn { padding: 6px 12px; background: #e0e7ff; color: #667eea; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+        .quick-btn:hover { background: #c7d2fe; }
+        .messages-title { font-size: 18px; margin-bottom: 12px; color: #374151; font-weight: 600; }
+        .messages-container { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .messages-box { background: #f8f9fa; padding: 15px; border-radius: 10px; }
+        .messages { max-height: 400px; overflow-y: auto; }
+        .message { padding: 10px; margin-bottom: 8px; background: white; border-left: 3px solid #667eea; border-radius: 6px; font-size: 12px; font-family: 'Courier New', monospace; word-wrap: break-word; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .subscribe-message { padding: 10px; margin-bottom: 8px; background: white; border-left: 3px solid #10b981; border-radius: 6px; font-size: 12px; font-family: 'Courier New', monospace; word-wrap: break-word; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .empty { text-align: center; padding: 60px 20px; color: #9ca3af; font-size: 14px; }
+        @media (max-width: 768px) { 
+            .controls { flex-direction: column; } 
+            .btn { width: 100%; }
+            .messages-container { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 巴法云MQTT管理中心</h1>
+HTML
+
+echo "            <div class=\"status\" style=\"background: $STATUS_COLOR;\">● $STATUS</div>"
+
+cat << 'HTML'
+        </div>
+        <div class="content">
+HTML
+
+echo "            <div class=\"info\"><strong>服务器:</strong> $MQTT_HOST:$MQTT_PORT | <strong>主题列表:</strong> $TOPICS</div>"
+
+cat << 'HTML'
+            
+            <div class="controls">
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="start">
+                    <button type="submit" class="btn btn-primary">▶️ 启动服务</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="stop">
+                    <button type="submit" class="btn btn-danger">⏹️ 停止服务</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="restart">
+                    <button type="submit" class="btn btn-secondary">🔄 重启服务</button>
+                </form>
+                <form method="POST" style="display: inline;">
+                    <input type="hidden" name="action" value="clear">
+                    <button type="submit" class="btn btn-secondary" onclick="return confirm('确定清空所有日志?');">🗑️ 清空日志</button>
+                </form>
+            </div>
+            
+            <div class="send-section">
+                <h3>📤 发送消息</h3>
+                <form method="POST" class="send-form">
+                    <input type="hidden" name="action" value="send">
+                    <div class="form-row">
+                        <label>目标主题:</label>
+HTML
+
+echo "                        <select name=\"topic\" required>$TOPIC_OPTIONS</select>"
+
+cat << 'HTML'
+                    </div>
+                    <div class="form-row">
+                        <label>消息内容:</label>
+                        <textarea name="message" id="msg-input" placeholder="输入消息内容..." required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%;">📡 发送消息</button>
+                </form>
+                
+                <div class="quick-cmds">
+                    <strong style="width: 100%; margin-bottom: 5px; display: block;">快捷指令:</strong>
+                    <button class="quick-btn" onclick="setMsg('CMD:PAUSE')">⏯️ 暂停</button>
+                    <button class="quick-btn" onclick="setMsg('CMD:NEXT')">⏭️ 下一首</button>
+                    <button class="quick-btn" onclick="setMsg('CMD:PREV')">⏮️ 上一首</button>
+                    <button class="quick-btn" onclick="setMsg('CMD:STOP')">⏹️ 停止</button>
+                    <button class="quick-btn" onclick="setMsg('CMD:VOLUP')">🔊 音量+</button>
+                    <button class="quick-btn" onclick="setMsg('CMD:VOLDOWN')">🔉 音量-</button>
+                </div>
+            </div>
+            
+            <div class="messages-container">
+                <div class="messages-box">
+                    <h3 class="messages-title">📤 发送历史 (最新30条)</h3>
+HTML
+
+echo "                    <div class=\"messages\">$SEND_MESSAGES</div>"
+
+cat << 'HTML'
+                </div>
+                <div class="messages-box">
+                    <h3 class="messages-title">📥 接收消息 (最新30条)</h3>
+HTML
+
+echo "                    <div class=\"messages\">$SUBSCRIBE_MESSAGES</div>"
+
+cat << 'HTML'
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        function setMsg(txt) {
+            document.getElementById('msg-input').value = txt;
+        }
+        setTimeout(function(){ window.location.reload(); }, 10000);
+    </script>
+</body>
+</html>
+HTML
+WEBCGI
+        
+        chmod +x /tmp/bemfa_web/index.cgi
+        
+        # 启动busybox httpd
+        cd /tmp/bemfa_web
+        busybox httpd -p $WEB_PORT -h /tmp/bemfa_web -c /tmp/bemfa_web &
+        echo $! > "$WEB_PID"
+        
+        echo "✅ Web服务启动成功 (PID: $(cat $WEB_PID))"
+        echo "   访问: http://$(hostname -I | awk '{print $1}'):$WEB_PORT/index.cgi"
+    else
+        echo "❌ busybox 未找到，无法启动Web服务"
+        return 1
+    fi
+}
+
+# 停止Web服务
+stop_web() {
+    if ! is_web_running; then
+        echo "✗ Web服务未运行"
+        rm -f "$WEB_PID"
+        return 1
+    fi
+    
+    echo "⏹️  停止Web服务..."
+    kill $(cat "$WEB_PID") 2>/dev/null
+    rm -f "$WEB_PID"
+    pkill -f "busybox httpd.*$WEB_PORT"
+    
+    echo "✅ Web服务已停止"
+}
+
+# 查看Web状态
+status_web() {
+    if is_web_running; then
+        echo "✅ Web服务运行中"
+        echo "   PID: $(cat $WEB_PID)"
+        echo "   端口: $WEB_PORT"
+        echo "   访问: http://$(hostname -I | awk '{print $1}'):$WEB_PORT/index.cgi"
+    else
+        echo "❌ Web服务未运行"
+        rm -f "$WEB_PID"
+    fi
+}
+
+# 主程序
+case "$1" in
+    start)
+        start_web
+        ;;
+    stop)
+        stop_web
+        ;;
+    restart)
+        stop_web
+        sleep 1
+        start_web
+        ;;
+    status)
+        status_web
+        ;;
+    *)
+        echo "Web管理界面控制脚本"
+        echo ""
+        echo "用法: $0 {start|stop|restart|status}"
+        echo ""
+        echo "命令:"
+        echo "  start     启动Web服务"
+        echo "  stop      停止Web服务"
+        echo "  restart   重启Web服务"
+        echo "  status    查看服务状态"
+        exit 1
+        ;;
+esac
+EOF
+
+    chmod +x "$INSTALL_DIR/web.sh"
+    echo "✅ Web管理界面创建完成"
+}
+
+# 显示使用说明
+show_usage() {
+    echo ""
+    echo "=========================================="
+    echo "  ✅ 安装完成!"
+    echo "=========================================="
+    echo ""
+    echo "📁 安装目录: $INSTALL_DIR"
+    echo ""
+    echo "🔧 配置文件:"
+    echo "   $INSTALL_DIR/bemfa_config.conf"
+    echo ""
+    echo "📝 编辑配置:"
+    echo "   nano $INSTALL_DIR/bemfa_config.conf"
+    echo ""
+    echo "🚀 启动服务:"
+    echo "   $INSTALL_DIR/bemfa_mqtt.sh start"
+    echo ""
+    echo "🌐 启动Web界面:"
+    echo "   $INSTALL_DIR/web.sh start"
+    echo "   访问: http://$(hostname -I | awk '{print $1}'):8080/index.cgi"
+    echo ""
+    echo "📊 查看状态:"
+    echo "   $INSTALL_DIR/bemfa_mqtt.sh status"
+    echo ""
+    echo "📤 发送消息:"
+    echo "   $INSTALL_DIR/bemfa_mqtt.sh send <主题> <消息>"
+    echo ""
+    echo "📋 查看日志:"
+    echo "   $INSTALL_DIR/bemfa_mqtt.sh log"
+    echo ""
+    echo "=========================================="
+    echo ""
+    echo "💡 提示:"
+    echo "   1. 编辑配置文件添加更多主题"
+    echo "   2. 支持JSON格式和旧格式消息"
+    echo "   3. Web界面每10秒自动刷新"
+    echo ""
+}
+
+# 主安装流程
+main() {
+    check_dependencies
+    create_directories
+    create_config
+    create_mqtt_script
+    create_player_script
+    create_web_interface
+    show_usage
+}
+
+main

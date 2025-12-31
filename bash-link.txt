@@ -4,3 +4,4 @@ APT update 1 3  6 个月更新一次|https://raw.githubusercontent.com/chf5762-s
 N 1  WIFI Link SetUp|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/n1-wifi-link
 Postgres-vetor 向量数据库|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/PostgreSQL%20%2B%20pgvector%20setup
 N1 Bluetooth manage|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/N1%20blutooth%20setup%20manage
+install-xfce-xrdp.sh|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/install-xfce-xrdp.sh

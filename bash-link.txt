@@ -5,3 +5,4 @@ N 1  WIFI Link SetUp|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/he
 Postgres-vetor 向量数据库|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/PostgreSQL%20%2B%20pgvector%20setup
 N1 Bluetooth manage|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/N1%20blutooth%20setup%20manage
 install-xfce-xrdp.sh|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/install-xfce-xrdp.sh
+修复 X Server 无法启动（framebuffer mode 错误）|https://github.com/chf5762-sudo/bash/blob/main/%E4%BF%AE%E5%A4%8D%20X%20Server%20%E6%97%A0%E6%B3%95%E5%90%AF%E5%8A%A8%EF%BC%88framebuffer%20mode%20%E9%94%99%E8%AF%AF%EF%BC%89

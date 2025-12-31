@@ -9,6 +9,12 @@
       "id": 2,
       "command": "docker run -d -p 8181:8181 --name fuclaude-app pengzhile/fuclaude:latest",
       "added_time": "2025-11-16T12:40:52Z"
+    },
+    {
+      "id": 3,
+      "command": "systemctl restart caddy",
+      "favorite": false,
+      "added_time": "2025-12-31T08:10:49Z"
     }
   ],
   "scripts": [

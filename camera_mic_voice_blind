@@ -1,0 +1,52 @@
+#!/bin/bash
+
+RULE_FILE="/etc/udev/rules.d/99-media-fixed.rules"
+[[ ! -f /usr/bin/v4l2-ctl ]] && sudo apt update && sudo apt install v4l2-utils -y > /dev/null
+
+echo "=========================================="
+echo "      多媒体设备绑定 (最终修复版)"
+echo "=========================================="
+
+# 1. 清理旧规则
+sudo rm -f $RULE_FILE
+echo "[1/3] 已清理旧规则..."
+
+# 2. 扫描设备并获取 ID
+# 摄像头 (固定取 video1)
+CAM_ID_V=$(udevadm info -a -n /dev/video1 2>/dev/null | grep '{idVendor}' | head -n 1 | cut -d'"' -f2)
+CAM_ID_P=$(udevadm info -a -n /dev/video1 2>/dev/null | grep '{idProduct}' | head -n 1 | cut -d'"' -f2)
+
+# USB音频 (固定取 controlC1)
+SND_ID_V=$(udevadm info -a -n /dev/snd/controlC1 2>/dev/null | grep '{idVendor}' | head -n 1 | cut -d'"' -f2)
+SND_ID_P=$(udevadm info -a -n /dev/snd/controlC1 2>/dev/null | grep '{idProduct}' | head -n 1 | cut -d'"' -f2)
+
+# 3. 写入新规则 (去掉复杂的 serial，增加稳定性)
+echo "[2/3] 正在写入新规则..."
+
+# 写入摄像头规则
+if [ -n "$CAM_ID_V" ]; then
+    echo "SUBSYSTEM==\"video4linux\", ATTRS{idVendor}==\"$CAM_ID_V\", ATTRS{idProduct}==\"$CAM_ID_P\", SYMLINK+=\"cam1\"" | sudo tee -a $RULE_FILE
+fi
+
+# 写入音频规则 (改用更强力的内核匹配模式)
+if [ -n "$SND_ID_V" ]; then
+    echo "SUBSYSTEM==\"sound\", ATTRS{idVendor}==\"$SND_ID_V\", ATTRS{idProduct}==\"$SND_ID_P\", SYMLINK+=\"mic1\"" | sudo tee -a $RULE_FILE
+fi
+
+# 4. 强制激活
+echo "[3/3] 正在强制刷新系统节点..."
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add
+
+# 5. 最终检查与手动补齐 (防止系统不创建软链)
+sleep 1
+if [ ! -L "/dev/mic1" ] && [ -e "/dev/snd/controlC1" ]; then
+    sudo ln -sf /dev/snd/controlC1 /dev/mic1
+    echo "提示: 已通过手动链接创建 /dev/mic1"
+fi
+
+echo "------------------------------------------"
+echo "验证结果:"
+ls -l /dev/cam1 2>/dev/null || echo "cam1 绑定失败"
+ls -l /dev/mic1 2>/dev/null || echo "mic1 绑定失败"
+echo "------------------------------------------"

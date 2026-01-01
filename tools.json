@@ -27,6 +27,12 @@
       "command": "docker run -d --name kkfileview --restart=always -p 8012:8012 yimik/kkfileview:latest",
       "favorite": false,
       "added_time": "2026-01-01T01:40:27Z"
+    },
+    {
+      "id": 6,
+      "command": "docker run -d --name=maxkb --restart=always -p 3007:8080 -v C:/maxkb:/opt/maxkb 1panel/maxkb",
+      "favorite": false,
+      "added_time": "2026-01-01T01:41:50Z"
     }
   ],
   "scripts": [

@@ -1,1 +1,74 @@
+除了你已经掌握的基础接力，n8n 的 Code 节点中还有几种常见的复杂数据转换场景，这些通常是单纯靠 UI 连线很难完成的：
 
+1. 数组扁平化 (Exploding)
+场景： AI 一次性识别了图片里的 5 件商品，返回了一个列表，但你需要把它们拆分成 5 条数据分别入库。
+
+JavaScript
+
+const items = $json.ai_list; // 假设这是一个数组
+return items.map(item => {
+  return { json: { ...item, photo: $json.photo } }; 
+});
+效果： 节点输出会从 1 个变为多个，n8n 会自动为每个 item 触发一次后面的“入库”节点。
+
+2. 条件路径拦截 (Filtering)
+场景： 在代码里判断识别结果，如果不符合要求（比如 AI 置信度太低），直接“掐断”流程，不让它传给下一个节点。
+
+JavaScript
+
+if ($json.confidence < 0.8) {
+  return []; // 返回空数组，后面的节点就不会执行了
+}
+return $input.item;
+3. 数据重组与分组 (Grouping/Aggregation)
+场景： 把多条独立的数据，根据“分类”合并成一个大的报告发送。
+
+JavaScript
+
+// 这种通常配合多个输入项使用
+const allData = $input.all(); 
+const summary = allData.reduce((acc, item) => {
+  const cat = item.json.Category;
+  acc[cat] = (acc[cat] || 0) + 1;
+  return acc;
+}, {});
+return { json: summary };
+4. 二进制与 Base64 互相转换
+场景： 有些 API 不接受文件上传，只接受 Base64 字符串。
+
+JavaScript
+
+// 获取二进制文件
+const binaryData = $input.item.binary.data;
+// 转为 Base64 字符串塞进 JSON
+return {
+  json: {
+    ...$json,
+    base64_file: binaryData.data
+  }
+};
+5. 动态 Key 名转换
+场景： 你的数据库列名是动态的（比如根据日期变动），或者 AI 返回的 Key 名不规范（带空格或特殊字符）。
+
+JavaScript
+
+const rawData = $json;
+const cleanData = {};
+for (let key in rawData) {
+  // 把所有 Key 转为小写并去掉空格
+  const newKey = key.toLowerCase().replace(/\s+/g, '_');
+  cleanData[newKey] = rawData[key];
+}
+return { json: cleanData };
+总结：Code 节点的“权杖”
+在 n8n 里，如果你发现：
+
+需要循环处理数据。
+
+需要合并多个不同来源的节点。
+
+需要改变输出项的数量（1 变多 或 多变 1）。
+
+这时候 return 一个经过 JavaScript 逻辑处理过的对象，就是最强大的武器。
+
+下一步： 你的入库节点目前运行稳定吗？如果需要处理“一张图识别出多个物体”的拆分入库，我可以帮你写那个转换逻辑。

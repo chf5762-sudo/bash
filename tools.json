@@ -21,6 +21,12 @@
       "command": "speaker-test -t wav -c 2 -l 2",
       "favorite": false,
       "added_time": "2025-12-31T08:22:41Z"
+    },
+    {
+      "id": 5,
+      "command": "docker run -d --name kkfileview --restart=always -p 8012:8012 yimik/kkfileview:latest",
+      "favorite": false,
+      "added_time": "2026-01-01T01:40:27Z"
     }
   ],
   "scripts": [

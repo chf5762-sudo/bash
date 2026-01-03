@@ -1,357 +1,831 @@
 #!/bin/bash
 
 ################################################################################
-# Docker Selenium + noVNC 完整诊断脚本
-# 用途: 快速定位 noVNC 连接问题
+# Selenium Firefox 一键部署、配置和测试脚本
+# 
+# 功能:
+# 1. 安装 Docker 容器(Firefox Selenium)
+# 2. 安装 Python 和 Selenium 库
+# 3. 配置自动启动服务
+# 4. 全链条测试(容器→Selenium→noVNC→外网访问)
+# 5. 生成诊断报告
 #
-# 正确的部署命令:
-# ----------------
-# docker run -d \
-#   --name firefox-selenium \
-#   --restart=unless-stopped \
-#   -p 4444:4444 \
-#   -p 7900:7900 \
-#   -e SE_VNC_NO_PASSWORD=1 \
-#   -e SE_SCREEN_WIDTH=1920 \
-#   -e SE_SCREEN_HEIGHT=1080 \
-#   -v ~/firefox-data:/home/seluser \
-#   --shm-size=2g \
-#   seleniarm/standalone-firefox
+# 使用方法:
+#   curl -O https://your-server/selenium_installer.sh
+#   chmod +x selenium_installer.sh
+#   ./selenium_installer.sh
 #
-# 访问地址: http://你的IP:7900/
-#
-################################################################################
-#
-# 今天的排查链条总结
-# 🔍 排查顺序(由外到内,顺藤摸瓜)
-#
-# 1. 容器状态
-#    ├─ docker ps → 确认容器运行
-#    └─ docker logs → 查看启动日志
-#
-# 2. 端口映射
-#    ├─ docker port → 确认端口已映射
-#    └─ netstat/lsof → 确认宿主机端口监听
-#
-# 3. 容器内进程 ⭐ 关键!
-#    ├─ ps aux | grep Xvfb → 虚拟显示器
-#    ├─ ps aux | grep x11vnc → VNC服务
-#    ├─ ps aux | grep novnc → WebSocket代理
-#    └─ ps aux | grep firefox → 浏览器
-#
-# 4. 容器内端口监听 ⭐⭐ 最关键!
-#    ├─ netstat/ss | grep 5900 → VNC端口
-#    ├─ netstat/ss | grep 7900 → noVNC端口
-#    └─ netstat/ss | grep 4444 → Selenium端口
-#
-# 5. 容器内部连接测试 ⭐⭐⭐ 发现问题的关键!
-#    ├─ curl telnet://localhost:5900 → VNC连接 (最关键!)
-#    ├─ curl http://localhost:7900/ → HTTP测试
-#    └─ curl WebSocket upgrade → WebSocket测试
-#
-# 6. 问题定位
-#    └─ 5900端口无法连接 → 缺少密码文件!
-#
-# 7. 解决方案
-#    └─ 添加 -e SE_VNC_NO_PASSWORD=1
-#
-################################################################################
-#
-# 🎯 关键诊断点速查表
-#
-# | 检查点       | 命令                            | 判断标准           |
-# |--------------|--------------------------------|--------------------|
-# | 容器运行     | docker ps                      | STATUS = Up        |
-# | VNC进程      | ps aux | grep x11vnc           | 进程存在           |
-# | VNC端口      | ss -tlnp | grep 5900           | LISTEN状态         |
-# | **VNC连接**  | curl telnet://localhost:5900   | **Connected** ⭐    |
-# | HTTP访问     | curl -I localhost:7900         | HTTP 200           |
-# | WebSocket    | curl --upgrade                 | 101 Switching      |
-#
-################################################################################
-#
-# 🔑 核心发现: 
-# 5900端口虽然有x11vnc进程,但没有监听(LISTEN)状态,
-# 导致WebSocket无法转发到VNC。
-# 用 `curl telnet://localhost:5900` 这一步直接发现了问题!
-#
-################################################################################
-#
-# 📝 快速记忆口诀:
-# 容器跑不跑? → docker ps
-# 端口映射没? → docker port
-# 进程活着吗? → ps aux
-# 端口开了吗? → ss -tlnp
-# 能连接吗?   → curl telnet://
-#
+# 或直接运行: bash selenium_installer.sh
 ################################################################################
 
-set -e
+set -e  # 遇到错误立即退出
 
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 容器名称
-CONTAINER_NAME="${1:-firefox-selenium}"
+# 配置变量
+CONTAINER_NAME="firefox-selenium"
+IMAGE_NAME="seleniarm/standalone-firefox"
+DATA_DIR="$HOME/firefox-data"
+SCRIPT_DIR="$HOME"
+SERVICE_NAME="selenium-browser"
+SELENIUM_PORT=4444
+NOVNC_PORT=7900
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}Docker Selenium + noVNC 诊断工具${NC}"
-echo -e "${BLUE}容器名称: ${CONTAINER_NAME}${NC}"
-echo -e "${BLUE}========================================${NC}\n"
+# 获取公网IP
+PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "未知")
 
-# 辅助函数
-check_status() {
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✓ 通过${NC}"
+################################################################################
+# 工具函数
+################################################################################
+
+print_header() {
+    echo -e "\n${BLUE}========================================${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}========================================${NC}\n"
+}
+
+print_step() {
+    echo -e "\n${PURPLE}[步骤 $1]${NC} ${CYAN}$2${NC}"
+    echo "----------------------------------------"
+}
+
+print_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+print_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
+
+print_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+print_info() {
+    echo -e "${CYAN}ℹ️  $1${NC}"
+}
+
+check_command() {
+    if command -v $1 &> /dev/null; then
+        print_success "$1 已安装"
         return 0
     else
-        echo -e "${RED}✗ 失败${NC}"
+        print_warning "$1 未安装"
         return 1
     fi
 }
 
-print_step() {
-    echo -e "\n${YELLOW}[步骤 $1]${NC} $2"
-    echo "----------------------------------------"
+press_enter() {
+    echo -e "\n${YELLOW}按 Enter 继续...${NC}"
+    read
 }
 
-# 步骤 1: 检查容器是否存在和运行
-print_step 1 "检查容器状态"
-if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-    echo -e "容器存在: ${GREEN}是${NC}"
+################################################################################
+# 主菜单
+################################################################################
+
+show_menu() {
+    clear
+    print_header "🦊 Selenium Firefox 自动化部署工具"
     
-    if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
-        echo -e "运行状态: ${GREEN}运行中${NC}"
-        CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' ${CONTAINER_NAME})
-        echo "详细状态: ${CONTAINER_STATUS}"
-        UPTIME=$(docker ps --format '{{.Status}}' --filter "name=${CONTAINER_NAME}")
-        echo "运行时间: ${UPTIME}"
-    else
-        echo -e "运行状态: ${RED}已停止${NC}"
-        echo -e "${YELLOW}提示: 运行 'docker start ${CONTAINER_NAME}' 启动容器${NC}"
-        exit 1
+    echo "当前服务器信息:"
+    echo "  📍 公网IP: ${PUBLIC_IP}"
+    echo "  🖥️  架构: $(uname -m)"
+    echo "  🐧 系统: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
+    echo ""
+    
+    echo "请选择操作:"
+    echo "  ${GREEN}1${NC}) 🚀 完整安装(推荐) - 一键完成所有配置"
+    echo "  ${GREEN}2${NC}) 📦 仅安装 Docker 容器"
+    echo "  ${GREEN}3${NC}) 🐍 仅安装 Python + Selenium"
+    echo "  ${GREEN}4${NC}) ⚙️  仅配置自动启动服务"
+    echo "  ${GREEN}5${NC}) 🧪 全链条测试"
+    echo "  ${GREEN}6${NC}) 📊 查看服务状态"
+    echo "  ${GREEN}7${NC}) 🔄 重启服务"
+    echo "  ${GREEN}8${NC}) 🗑️  卸载所有组件"
+    echo "  ${GREEN}9${NC}) 🛠️  故障诊断工具"
+    echo "  ${GREEN}0${NC}) 🚪 退出"
+    echo ""
+    echo -n "请输入选项 [0-9]: "
+}
+
+################################################################################
+# 安装 Docker 容器
+################################################################################
+
+install_docker_container() {
+    print_step "1" "检查 Docker"
+    
+    if ! check_command docker; then
+        print_error "Docker 未安装,请先安装 Docker"
+        echo "运行: curl -fsSL https://get.docker.com | sh"
+        return 1
     fi
-else
-    echo -e "${RED}✗ 容器不存在${NC}"
-    echo -e "${YELLOW}提示: 请先创建容器${NC}"
-    exit 1
-fi
-
-# 步骤 2: 检查端口映射
-print_step 2 "检查端口映射"
-echo "容器端口映射:"
-docker port ${CONTAINER_NAME} 2>/dev/null || echo "无法获取端口信息"
-
-echo -e "\n检查关键端口:"
-for port in 4444 7900 5900; do
-    if docker port ${CONTAINER_NAME} | grep -q "${port}"; then
-        echo -e "  端口 ${port}: ${GREEN}已映射${NC}"
-    else
-        if [ "$port" == "5900" ]; then
-            echo -e "  端口 ${port}: ${YELLOW}未映射 (内部使用,正常)${NC}"
+    
+    print_step "2" "检查是否有旧容器"
+    
+    if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+        print_warning "发现已存在的容器: ${CONTAINER_NAME}"
+        echo -n "是否删除并重新创建? [y/N]: "
+        read answer
+        if [[ "$answer" =~ ^[Yy]$ ]]; then
+            docker stop ${CONTAINER_NAME} 2>/dev/null || true
+            docker rm ${CONTAINER_NAME} 2>/dev/null || true
+            print_success "旧容器已删除"
         else
-            echo -e "  端口 ${port}: ${RED}未映射${NC}"
+            print_info "保留现有容器,跳过创建"
+            return 0
         fi
     fi
-done
-
-# 步骤 3: 检查容器内关键进程
-print_step 3 "检查容器内进程"
-
-echo "3.1 Xvfb (虚拟显示器):"
-if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[X]vfb"; then
-    docker exec ${CONTAINER_NAME} ps aux | grep "[X]vfb"
-    check_status
-else
-    echo -e "${RED}✗ Xvfb 进程未运行${NC}"
-fi
-
-echo -e "\n3.2 Firefox 浏览器:"
-if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[f]irefox"; then
-    docker exec ${CONTAINER_NAME} ps aux | grep "[f]irefox" | head -3
-    check_status
-else
-    echo -e "${YELLOW}⚠ Firefox 未运行 (正常,等待 Selenium 启动)${NC}"
-fi
-
-echo -e "\n3.3 x11vnc (VNC 服务器):"
-if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[x]11vnc"; then
-    docker exec ${CONTAINER_NAME} ps aux | grep "[x]11vnc"
-    check_status
-else
-    echo -e "${RED}✗ x11vnc 进程未运行${NC}"
-fi
-
-echo -e "\n3.4 noVNC/websockify (WebSocket 代理):"
-if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[n]ovnc"; then
-    docker exec ${CONTAINER_NAME} ps aux | grep "[n]ovnc"
-    check_status
-else
-    echo -e "${RED}✗ noVNC 进程未运行${NC}"
-fi
-
-echo -e "\n3.5 Selenium Grid:"
-if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[j]ava.*selenium"; then
-    echo -e "${GREEN}✓ Selenium 运行中${NC}"
-else
-    echo -e "${RED}✗ Selenium 未运行${NC}"
-fi
-
-# 步骤 4: 检查容器内端口监听
-print_step 4 "检查容器内端口监听"
-
-echo "4.1 检查 5900 端口 (x11vnc):"
-if docker exec ${CONTAINER_NAME} sh -c "command -v netstat >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} netstat -tlnp 2>/dev/null | grep ":5900" || echo "端口 5900 未监听"
-elif docker exec ${CONTAINER_NAME} sh -c "command -v ss >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} ss -tlnp 2>/dev/null | grep ":5900" || echo "端口 5900 未监听"
-else
-    echo "无法检查 (缺少 netstat/ss 工具)"
-fi
-
-echo -e "\n4.2 检查 7900 端口 (noVNC):"
-if docker exec ${CONTAINER_NAME} sh -c "command -v netstat >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} netstat -tlnp 2>/dev/null | grep ":7900" || echo "端口 7900 未监听"
-elif docker exec ${CONTAINER_NAME} sh -c "command -v ss >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} ss -tlnp 2>/dev/null | grep ":7900" || echo "端口 7900 未监听"
-else
-    echo "无法检查"
-fi
-
-echo -e "\n4.3 检查 4444 端口 (Selenium):"
-if docker exec ${CONTAINER_NAME} sh -c "command -v netstat >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} netstat -tlnp 2>/dev/null | grep ":4444" || echo "端口 4444 未监听"
-elif docker exec ${CONTAINER_NAME} sh -c "command -v ss >/dev/null 2>&1" 2>/dev/null; then
-    docker exec ${CONTAINER_NAME} ss -tlnp 2>/dev/null | grep ":4444" || echo "端口 4444 未监听"
-else
-    echo "无法检查"
-fi
-
-# 步骤 5: 测试容器内部连接
-print_step 5 "测试容器内部连接"
-
-echo "5.1 测试 VNC 端口 (5900):"
-if docker exec ${CONTAINER_NAME} curl -s --connect-timeout 3 telnet://localhost:5900 >/dev/null 2>&1; then
-    echo -e "${GREEN}✓ 5900 端口可连接${NC}"
-else
-    echo -e "${RED}✗ 5900 端口无法连接 - 这是关键问题!${NC}"
-    echo -e "${YELLOW}原因: x11vnc 可能未正确启动或缺少密码文件${NC}"
-fi
-
-echo -e "\n5.2 测试 noVNC HTTP (7900):"
-HTTP_CODE=$(docker exec ${CONTAINER_NAME} curl -s -o /dev/null -w "%{http_code}" http://localhost:7900/ 2>/dev/null || echo "000")
-if [ "$HTTP_CODE" = "200" ]; then
-    echo -e "${GREEN}✓ HTTP 7900 返回 200 OK${NC}"
-else
-    echo -e "${RED}✗ HTTP 7900 返回 ${HTTP_CODE}${NC}"
-fi
-
-echo -e "\n5.3 测试 noVNC WebSocket 升级:"
-WS_RESULT=$(docker exec ${CONTAINER_NAME} curl -s --include --no-buffer \
-    --header "Connection: Upgrade" \
-    --header "Upgrade: websocket" \
-    --header "Sec-WebSocket-Key: SGVsbG8sIHdvcmxkIQ==" \
-    --header "Sec-WebSocket-Version: 13" \
-    http://localhost:7900/ 2>/dev/null | head -5)
-
-if echo "$WS_RESULT" | grep -q "101 Switching Protocols"; then
-    echo -e "${GREEN}✓ WebSocket 升级成功${NC}"
-    if echo "$WS_RESULT" | grep -q "Failed to connect"; then
-        echo -e "${RED}✗ 但连接下游失败 (5900 端口问题)${NC}"
-    fi
-else
-    echo -e "${RED}✗ WebSocket 升级失败${NC}"
-fi
-
-# 步骤 6: 检查宿主机端口
-print_step 6 "检查宿主机端口访问"
-
-echo "6.1 本地访问 7900 端口:"
-if curl -s -o /dev/null -w "%{http_code}" http://localhost:7900/ 2>/dev/null | grep -q "200"; then
-    echo -e "${GREEN}✓ 本地可访问${NC}"
-else
-    echo -e "${RED}✗ 本地无法访问${NC}"
-fi
-
-echo -e "\n6.2 检查宿主机防火墙 (iptables):"
-if command -v iptables >/dev/null 2>&1; then
-    if sudo iptables -L INPUT -n | grep -q "7900"; then
-        echo -e "${GREEN}✓ iptables 有 7900 规则${NC}"
-        sudo iptables -L INPUT -n -v | grep "7900"
+    
+    print_step "3" "创建数据目录"
+    mkdir -p ${DATA_DIR}
+    print_success "数据目录: ${DATA_DIR}"
+    
+    print_step "4" "拉取 Firefox Selenium 镜像"
+    docker pull ${IMAGE_NAME}
+    
+    print_step "5" "创建并启动容器"
+    
+    docker run -d \
+      --name ${CONTAINER_NAME} \
+      --restart=unless-stopped \
+      -p ${SELENIUM_PORT}:4444 \
+      -p ${NOVNC_PORT}:7900 \
+      -e SE_VNC_NO_PASSWORD=1 \
+      -e SE_SCREEN_WIDTH=1920 \
+      -e SE_SCREEN_HEIGHT=1080 \
+      -v ${DATA_DIR}:/home/seluser \
+      --shm-size=2g \
+      ${IMAGE_NAME}
+    
+    print_success "容器已创建: ${CONTAINER_NAME}"
+    
+    print_step "6" "等待容器启动"
+    echo -n "等待 20 秒"
+    for i in {1..20}; do
+        echo -n "."
+        sleep 1
+    done
+    echo ""
+    
+    print_step "7" "验证容器状态"
+    
+    if docker ps | grep -q ${CONTAINER_NAME}; then
+        print_success "容器运行正常"
+        docker ps | grep ${CONTAINER_NAME}
     else
-        echo -e "${YELLOW}⚠ iptables 没有明确的 7900 规则${NC}"
+        print_error "容器启动失败"
+        echo "查看日志:"
+        docker logs ${CONTAINER_NAME} --tail 20
+        return 1
     fi
     
-    if sudo iptables -L INPUT -n | grep -q "4444"; then
-        echo -e "${GREEN}✓ iptables 有 4444 规则${NC}"
+    print_step "8" "检查端口"
+    
+    if curl -s http://localhost:${NOVNC_PORT}/ > /dev/null; then
+        print_success "noVNC 端口 ${NOVNC_PORT} 可访问"
     else
-        echo -e "${YELLOW}⚠ iptables 没有明确的 4444 规则${NC}"
+        print_error "noVNC 端口不可访问"
     fi
-else
-    echo "iptables 未安装"
-fi
+    
+    if curl -s http://localhost:${SELENIUM_PORT}/status > /dev/null; then
+        print_success "Selenium 端口 ${SELENIUM_PORT} 可访问"
+    else
+        print_error "Selenium 端口不可访问"
+    fi
+    
+    print_success "Docker 容器安装完成!"
+}
 
-# 步骤 7: 检查环境变量
-print_step 7 "检查容器环境变量"
-echo "VNC 相关配置:"
-docker exec ${CONTAINER_NAME} env 2>/dev/null | grep -E "VNC|DISPLAY|SCREEN" | sort
+################################################################################
+# 安装 Python 和 Selenium
+################################################################################
 
-# 步骤 8: 查看最近日志
-print_step 8 "查看容器日志 (最近30行)"
-docker logs --tail 30 ${CONTAINER_NAME} 2>&1
+install_python_selenium() {
+    print_step "1" "检查 Python"
+    
+    if ! check_command python3; then
+        print_error "Python3 未安装"
+        echo "正在安装..."
+        sudo apt update
+        sudo apt install python3 python3-pip -y
+    fi
+    
+    PYTHON_VERSION=$(python3 --version)
+    print_success "Python 版本: ${PYTHON_VERSION}"
+    
+    print_step "2" "安装 Selenium"
+    
+    echo "尝试安装 selenium..."
+    
+    # 方法1: 尝试系统包
+    if sudo apt install python3-selenium -y 2>/dev/null; then
+        print_success "通过 apt 安装 selenium"
+    else
+        # 方法2: pip 强制安装
+        print_info "通过 pip 安装 selenium"
+        if pip3 install selenium --break-system-packages 2>/dev/null; then
+            print_success "selenium 安装成功"
+        elif pip3 install selenium --user 2>/dev/null; then
+            print_success "selenium 安装成功(用户目录)"
+        else
+            # 方法3: 虚拟环境
+            print_info "创建虚拟环境安装"
+            sudo apt install python3-venv python3-full -y
+            python3 -m venv ${SCRIPT_DIR}/selenium-env
+            ${SCRIPT_DIR}/selenium-env/bin/pip install selenium
+            print_success "selenium 安装在虚拟环境: ${SCRIPT_DIR}/selenium-env"
+        fi
+    fi
+    
+    print_step "3" "验证 Selenium"
+    
+    if python3 -c "import selenium; print('版本:', selenium.__version__)" 2>/dev/null; then
+        print_success "Selenium 可用"
+        python3 -c "import selenium; print('版本:', selenium.__version__)"
+    elif [ -f "${SCRIPT_DIR}/selenium-env/bin/python" ]; then
+        print_success "Selenium 可用(虚拟环境)"
+        ${SCRIPT_DIR}/selenium-env/bin/python -c "import selenium; print('版本:', selenium.__version__)"
+    else
+        print_error "Selenium 安装失败"
+        return 1
+    fi
+    
+    print_success "Python + Selenium 安装完成!"
+}
 
-# 步骤 9: 网络诊断
-print_step 9 "外部访问测试"
+################################################################################
+# 创建自动启动脚本
+################################################################################
 
-# 获取公网IP
-PUBLIC_IP=$(curl -s ifconfig.me 2>/dev/null || echo "无法获取")
-echo "公网 IP: ${PUBLIC_IP}"
+create_startup_script() {
+    print_step "1" "创建浏览器保持运行脚本"
+    
+    # 检测 Python 路径
+    if [ -f "${SCRIPT_DIR}/selenium-env/bin/python" ]; then
+        PYTHON_CMD="${SCRIPT_DIR}/selenium-env/bin/python"
+    else
+        PYTHON_CMD="/usr/bin/python3"
+    fi
+    
+    cat > ${SCRIPT_DIR}/keep_browser_alive.py << 'SCRIPT_EOF'
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
+import time
+import sys
 
-if [ "$PUBLIC_IP" != "无法获取" ]; then
-    echo -e "\n建议的访问地址:"
-    echo -e "  HTTP:  ${GREEN}http://${PUBLIC_IP}:7900/${NC}"
-    echo -e "  noVNC: ${GREEN}http://${PUBLIC_IP}:7900/?autoconnect=1${NC}"
-    echo -e "  Selenium: ${GREEN}http://${PUBLIC_IP}:4444${NC}"
-fi
+print("=" * 60)
+print("🦊 Selenium Firefox 自动启动服务")
+print("=" * 60)
 
-# 步骤 10: 问题诊断总结
-print_step 10 "诊断总结与建议"
+max_retries = 5
+retry_count = 0
+driver = None
 
-ISSUES=0
+while retry_count < max_retries:
+    try:
+        options = webdriver.FirefoxOptions()
+        
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] 连接 Selenium Grid (尝试 {retry_count + 1}/{max_retries})...")
+        
+        driver = webdriver.Remote(
+            command_executor='http://localhost:4444',
+            options=options
+        )
+        
+        driver.set_page_load_timeout(30)
+        
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] ✅ Firefox 已启动!")
+        driver.get('https://google.com')
+        
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] 📺 noVNC 访问地址: http://localhost:7900/")
+        print("=" * 60)
+        print("🔄 浏览器保持运行中...")
+        print("=" * 60)
+        
+        # 重置重试计数
+        retry_count = 0
+        
+        # 保持运行
+        while True:
+            try:
+                driver.current_url
+                time.sleep(300)  # 每5分钟检查一次
+            except WebDriverException as e:
+                print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ⚠️ 连接断开: {e}")
+                raise
+                
+    except KeyboardInterrupt:
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] 收到停止信号")
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        print("✅ 服务已停止")
+        sys.exit(0)
+        
+    except Exception as e:
+        retry_count += 1
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] ❌ 错误: {e}")
+        
+        if driver:
+            try:
+                driver.quit()
+            except:
+                pass
+        
+        if retry_count < max_retries:
+            wait_time = retry_count * 10
+            print(f"等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
+        else:
+            print(f"\n❌ 达到最大重试次数({max_retries}),服务退出")
+            sys.exit(1)
+SCRIPT_EOF
+    
+    chmod +x ${SCRIPT_DIR}/keep_browser_alive.py
+    print_success "脚本已创建: ${SCRIPT_DIR}/keep_browser_alive.py"
+    
+    print_step "2" "创建 systemd 服务"
+    
+    sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null << SERVICE_EOF
+[Unit]
+Description=Selenium Firefox Browser Auto-Start Service
+Documentation=https://www.selenium.dev/
+After=docker.service ${CONTAINER_NAME}.service network-online.target
+Requires=docker.service
+Wants=network-online.target
 
-# 检查关键问题
-if ! docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[x]11vnc"; then
-    echo -e "${RED}[严重] x11vnc 进程未运行${NC}"
-    ISSUES=$((ISSUES + 1))
-fi
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${SCRIPT_DIR}
+ExecStartPre=/bin/sleep 25
+ExecStart=${PYTHON_CMD} ${SCRIPT_DIR}/keep_browser_alive.py
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+KillMode=mixed
+TimeoutStopSec=30
 
-if ! docker exec ${CONTAINER_NAME} curl -s --connect-timeout 3 telnet://localhost:5900 >/dev/null 2>&1; then
-    echo -e "${RED}[严重] VNC 端口 5900 无法连接${NC}"
-    echo -e "${YELLOW}解决方案:${NC}"
-    echo "  1. 检查是否缺少 VNC 密码文件"
-    echo "  2. 重新创建容器并添加: -e SE_VNC_NO_PASSWORD=1"
-    echo "  3. 或手动创建密码: docker exec ${CONTAINER_NAME} x11vnc -storepasswd secret /home/seluser/.vnc/passwd"
-    ISSUES=$((ISSUES + 1))
-fi
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF
+    
+    print_success "systemd 服务已创建"
+    
+    print_step "3" "启用并启动服务"
+    
+    sudo systemctl daemon-reload
+    sudo systemctl enable ${SERVICE_NAME}
+    sudo systemctl start ${SERVICE_NAME}
+    
+    sleep 3
+    
+    if sudo systemctl is-active --quiet ${SERVICE_NAME}; then
+        print_success "服务已启动"
+    else
+        print_error "服务启动失败"
+        sudo systemctl status ${SERVICE_NAME} --no-pager
+        return 1
+    fi
+    
+    print_success "自动启动配置完成!"
+    print_info "查看日志: sudo journalctl -u ${SERVICE_NAME} -f"
+}
 
-if ! docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[n]ovnc"; then
-    echo -e "${RED}[严重] noVNC 进程未运行${NC}"
-    ISSUES=$((ISSUES + 1))
-fi
+################################################################################
+# 全链条测试
+################################################################################
 
-if [ $ISSUES -eq 0 ]; then
-    echo -e "${GREEN}✓ 未发现严重问题,服务应该可以正常访问${NC}"
-    echo -e "\n${BLUE}访问方式:${NC}"
-    echo "  浏览器访问: http://你的IP或域名:7900/"
-    echo "  确保使用 HTTP 而不是 HTTPS"
-else
-    echo -e "${RED}发现 ${ISSUES} 个严重问题,需要修复${NC}"
-fi
+run_full_test() {
+    print_header "🧪 开始全链条测试"
+    
+    local test_passed=0
+    local test_failed=0
+    
+    # 测试1: Docker 容器
+    print_step "1/8" "测试 Docker 容器"
+    if docker ps | grep -q ${CONTAINER_NAME}; then
+        print_success "容器运行正常"
+        ((test_passed++))
+    else
+        print_error "容器未运行"
+        ((test_failed++))
+    fi
+    
+    # 测试2: 容器内进程
+    print_step "2/8" "测试容器内进程"
+    if docker exec ${CONTAINER_NAME} ps aux 2>/dev/null | grep -q "[f]irefox"; then
+        print_info "Firefox 进程可能在运行(或等待启动)"
+        ((test_passed++))
+    else
+        print_warning "Firefox 进程未检测到(可能还未启动)"
+    fi
+    
+    # 测试3: VNC 端口
+    print_step "3/8" "测试 VNC 端口(5900)"
+    if docker exec ${CONTAINER_NAME} curl -s --connect-timeout 3 telnet://localhost:5900 >/dev/null 2>&1; then
+        print_success "VNC 端口可连接"
+        ((test_passed++))
+    else
+        print_error "VNC 端口无法连接"
+        ((test_failed++))
+    fi
+    
+    # 测试4: noVNC HTTP
+    print_step "4/8" "测试 noVNC HTTP(${NOVNC_PORT})"
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:${NOVNC_PORT}/ 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
+        print_success "noVNC HTTP 返回 200 OK"
+        ((test_passed++))
+    else
+        print_error "noVNC HTTP 返回 ${HTTP_CODE}"
+        ((test_failed++))
+    fi
+    
+    # 测试5: Selenium API
+    print_step "5/8" "测试 Selenium API(${SELENIUM_PORT})"
+    if curl -s http://localhost:${SELENIUM_PORT}/status | grep -q '"ready":true'; then
+        print_success "Selenium Grid 就绪"
+        ((test_passed++))
+    else
+        print_warning "Selenium Grid 可能正在初始化"
+    fi
+    
+    # 测试6: Python Selenium 连接
+    print_step "6/8" "测试 Python Selenium 连接"
+    
+    TEST_SCRIPT=$(cat << 'TEST_EOF'
+from selenium import webdriver
+import sys
 
-echo -e "\n${BLUE}========================================${NC}"
-echo -e "${BLUE}诊断完成${NC}"
-echo -e "${BLUE}========================================${NC}"
+try:
+    options = webdriver.FirefoxOptions()
+    driver = webdriver.Remote(
+        command_executor='http://localhost:4444',
+        options=options,
+    )
+    driver.set_page_load_timeout(10)
+    print("SUCCESS")
+    driver.quit()
+    sys.exit(0)
+except Exception as e:
+    print(f"FAILED: {e}")
+    sys.exit(1)
+TEST_EOF
+)
+    
+    if echo "$TEST_SCRIPT" | python3 2>/dev/null | grep -q "SUCCESS"; then
+        print_success "Python 可以连接 Selenium"
+        ((test_passed++))
+    else
+        print_error "Python 无法连接 Selenium"
+        ((test_failed++))
+    fi
+    
+    # 测试7: 自动启动服务
+    print_step "7/8" "测试自动启动服务"
+    if sudo systemctl is-active --quiet ${SERVICE_NAME}; then
+        print_success "自动启动服务运行中"
+        ((test_passed++))
+    else
+        print_warning "自动启动服务未运行"
+    fi
+    
+    # 测试8: 外网访问
+    print_step "8/8" "测试外网访问"
+    print_info "请在浏览器访问: http://${PUBLIC_IP}:${NOVNC_PORT}/"
+    echo -n "能否访问? [y/N]: "
+    read answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        print_success "外网访问正常"
+        ((test_passed++))
+    else
+        print_error "外网无法访问"
+        print_info "检查防火墙规则:"
+        sudo iptables -L INPUT -n | grep -E "${NOVNC_PORT}|${SELENIUM_PORT}" || echo "  未找到相关规则"
+        ((test_failed++))
+    fi
+    
+    # 测试总结
+    print_header "📊 测试报告"
+    echo "  ✅ 通过: ${test_passed}"
+    echo "  ❌ 失败: ${test_failed}"
+    echo ""
+    
+    if [ $test_failed -eq 0 ]; then
+        print_success "所有测试通过! 🎉"
+        echo ""
+        echo "📺 访问地址:"
+        echo "   noVNC:    http://${PUBLIC_IP}:${NOVNC_PORT}/"
+        echo "   Selenium: http://${PUBLIC_IP}:${SELENIUM_PORT}/"
+        return 0
+    else
+        print_error "部分测试失败,请检查日志"
+        echo ""
+        echo "查看服务日志:"
+        echo "   docker logs ${CONTAINER_NAME} --tail 50"
+        echo "   sudo journalctl -u ${SERVICE_NAME} -n 50"
+        return 1
+    fi
+}
+
+################################################################################
+# 查看状态
+################################################################################
+
+show_status() {
+    print_header "📊 服务状态"
+    
+    echo "🐳 Docker 容器:"
+    if docker ps | grep -q ${CONTAINER_NAME}; then
+        docker ps | grep ${CONTAINER_NAME}
+    else
+        print_error "容器未运行"
+    fi
+    
+    echo ""
+    echo "⚙️  系统服务:"
+    sudo systemctl status ${SERVICE_NAME} --no-pager | head -15
+    
+    echo ""
+    echo "🌐 网络端口:"
+    echo "  noVNC:    http://${PUBLIC_IP}:${NOVNC_PORT}/"
+    echo "  Selenium: http://${PUBLIC_IP}:${SELENIUM_PORT}/"
+    
+    echo ""
+    echo "📝 最近日志:"
+    sudo journalctl -u ${SERVICE_NAME} -n 10 --no-pager
+}
+
+################################################################################
+# 重启服务
+################################################################################
+
+restart_service() {
+    print_header "🔄 重启服务"
+    
+    print_step "1" "重启 Docker 容器"
+    docker restart ${CONTAINER_NAME}
+    sleep 10
+    
+    print_step "2" "重启自动启动服务"
+    sudo systemctl restart ${SERVICE_NAME}
+    sleep 5
+    
+    print_step "3" "检查状态"
+    if docker ps | grep -q ${CONTAINER_NAME} && sudo systemctl is-active --quiet ${SERVICE_NAME}; then
+        print_success "服务重启成功"
+    else
+        print_error "服务重启可能失败"
+    fi
+}
+
+################################################################################
+# 卸载
+################################################################################
+
+uninstall_all() {
+    print_header "🗑️  卸载所有组件"
+    
+    print_warning "这将删除:"
+    echo "  - Docker 容器: ${CONTAINER_NAME}"
+    echo "  - 系统服务: ${SERVICE_NAME}"
+    echo "  - 脚本文件: ${SCRIPT_DIR}/keep_browser_alive.py"
+    echo "  - 数据目录: ${DATA_DIR}"
+    echo ""
+    echo -n "确认卸载? [y/N]: "
+    read answer
+    
+    if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+        print_info "取消卸载"
+        return 0
+    fi
+    
+    print_step "1" "停止并删除服务"
+    sudo systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    sudo systemctl disable ${SERVICE_NAME} 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    sudo systemctl daemon-reload
+    
+    print_step "2" "停止并删除容器"
+    docker stop ${CONTAINER_NAME} 2>/dev/null || true
+    docker rm ${CONTAINER_NAME} 2>/dev/null || true
+    
+    print_step "3" "删除脚本"
+    rm -f ${SCRIPT_DIR}/keep_browser_alive.py
+    
+    print_step "4" "删除数据目录"
+    echo -n "是否删除数据目录 ${DATA_DIR}? [y/N]: "
+    read answer
+    if [[ "$answer" =~ ^[Yy]$ ]]; then
+        rm -rf ${DATA_DIR}
+        print_success "数据目录已删除"
+    fi
+    
+    print_success "卸载完成"
+}
+
+################################################################################
+# 故障诊断
+################################################################################
+
+run_diagnostic() {
+    print_header "🛠️  故障诊断工具"
+    
+    # 保存到文件
+    DIAG_FILE="/tmp/selenium_diagnostic_$(date +%Y%m%d_%H%M%S).log"
+    
+    {
+        echo "========================================="
+        echo "Selenium Firefox 诊断报告"
+        echo "时间: $(date)"
+        echo "========================================="
+        echo ""
+        
+        echo "=== 系统信息 ==="
+        uname -a
+        cat /etc/os-release
+        echo ""
+        
+        echo "=== Docker 版本 ==="
+        docker --version
+        echo ""
+        
+        echo "=== 容器状态 ==="
+        docker ps -a | grep ${CONTAINER_NAME}
+        echo ""
+        
+        echo "=== 容器日志(最近50行) ==="
+        docker logs ${CONTAINER_NAME} --tail 50 2>&1
+        echo ""
+        
+        echo "=== 服务状态 ==="
+        sudo systemctl status ${SERVICE_NAME} --no-pager
+        echo ""
+        
+        echo "=== 服务日志(最近50行) ==="
+        sudo journalctl -u ${SERVICE_NAME} -n 50 --no-pager
+        echo ""
+        
+        echo "=== 端口监听 ==="
+        sudo netstat -tlnp | grep -E "${NOVNC_PORT}|${SELENIUM_PORT}"
+        echo ""
+        
+        echo "=== 防火墙规则 ==="
+        sudo iptables -L INPUT -n | grep -E "${NOVNC_PORT}|${SELENIUM_PORT}"
+        echo ""
+        
+        echo "=== Python 环境 ==="
+        python3 --version
+        python3 -c "import selenium; print('Selenium:', selenium.__version__)" 2>&1
+        echo ""
+        
+    } | tee ${DIAG_FILE}
+    
+    print_success "诊断报告已保存: ${DIAG_FILE}"
+    echo ""
+    echo "请将此文件发送给技术支持"
+}
+
+################################################################################
+# 完整安装
+################################################################################
+
+full_install() {
+    print_header "🚀 开始完整安装"
+    
+    echo "将执行以下步骤:"
+    echo "  1. 安装 Docker 容器"
+    echo "  2. 安装 Python + Selenium"
+    echo "  3. 配置自动启动服务"
+    echo "  4. 运行全链条测试"
+    echo ""
+    press_enter
+    
+    # 步骤1
+    install_docker_container
+    if [ $? -ne 0 ]; then
+        print_error "Docker 容器安装失败"
+        return 1
+    fi
+    press_enter
+    
+    # 步骤2
+    install_python_selenium
+    if [ $? -ne 0 ]; then
+        print_error "Python + Selenium 安装失败"
+        return 1
+    fi
+    press_enter
+    
+    # 步骤3
+    create_startup_script
+    if [ $? -ne 0 ]; then
+        print_error "自动启动配置失败"
+        return 1
+    fi
+    press_enter
+    
+    # 步骤4
+    print_info "等待 30 秒让服务完全启动..."
+    sleep 30
+    
+    run_full_test
+    
+    if [ $? -eq 0 ]; then
+        print_header "🎉 安装成功!"
+        echo ""
+        echo "📺 访问地址:"
+        echo "   noVNC:    http://${PUBLIC_IP}:${NOVNC_PORT}/"
+        echo "   Selenium: http://${PUBLIC_IP}:${SELENIUM_PORT}/"
+        echo ""
+        echo "📝 常用命令:"
+        echo "   查看状态: sudo systemctl status ${SERVICE_NAME}"
+        echo "   查看日志: sudo journalctl -u ${SERVICE_NAME} -f"
+        echo "   重启服务: sudo systemctl restart ${SERVICE_NAME}"
+        echo ""
+    else
+        print_error "安装过程中出现问题,请查看日志"
+    fi
+}
+
+################################################################################
+# 主程序
+################################################################################
+
+main() {
+    # 检查是否为 root 或有 sudo 权限
+    if [ "$EUID" -ne 0 ]; then
+        if ! sudo -n true 2>/dev/null; then
+            print_error "此脚本需要 sudo 权限"
+            exit 1
+        fi
+    fi
+    
+    while true; do
+        show_menu
+        read choice
+        
+        case $choice in
+            1)
+                full_install
+                press_enter
+                ;;
+            2)
+                install_docker_container
+                press_enter
+                ;;
+            3)
+                install_python_selenium
+                press_enter
+                ;;
+            4)
+                create_startup_script
+                press_enter
+                ;;
+            5)
+                run_full_test
+                press_enter
+                ;;
+            6)
+                show_status
+                press_enter
+                ;;
+            7)
+                restart_service
+                press_enter
+                ;;
+            8)
+                uninstall_all
+                press_enter
+                ;;
+            9)
+                run_diagnostic
+                press_enter
+                ;;
+            0)
+                print_info "退出程序"
+                exit 0
+                ;;
+            *)
+                print_error "无效选项,请重新选择"
+                sleep 2
+                ;;
+        esac
+    done
+}
+
+# 运行主程序
+main

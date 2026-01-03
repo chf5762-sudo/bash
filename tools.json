@@ -33,6 +33,12 @@
       "command": "docker run -d --name=maxkb --restart=always -p 3007:8080 -v C:/maxkb:/opt/maxkb 1panel/maxkb",
       "favorite": false,
       "added_time": "2026-01-01T01:41:50Z"
+    },
+    {
+      "id": 7,
+      "command": "docker run -d   --name firefox-selenium   --restart=unless-stopped   -p 4444:4444   -p 7900:7900   -e SE_VNC_NO_PASSWORD=1   -e SE_SCREEN_WIDTH=1920   -e SE_SCREEN_HEIGHT=1080   -v ~/firefox-data:/home/seluser   --shm-size=2g   seleniarm/standalone-firefox",
+      "favorite": false,
+      "added_time": "2026-01-03T13:22:36Z"
     }
   ],
   "scripts": [

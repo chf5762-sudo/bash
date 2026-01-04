@@ -305,7 +305,7 @@ show_access_info() {
         echo "Tailscale 内网: http://$TAILSCALE_IP:6080/vnc.html"
     fi
     
-    echo "域名访问: http://vps1.beundredig.eu.org:6080/vnc.html"
+    echo "域名访问: http://XXX.beundredig.eu.org:6080/vnc.html"
     
     if [ -n "$PUBLIC_IP" ]; then
         echo "公网 IP: http://$PUBLIC_IP:6080/vnc.html"

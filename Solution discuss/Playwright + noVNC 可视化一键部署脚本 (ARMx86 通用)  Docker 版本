@@ -2,6 +2,7 @@
 # Playwright + noVNC 可视化一键部署脚本 (ARM/x86 通用)
 # ==========================================
 
+
 # 1. 准备工作目录
 cd ~
 mkdir -p ~/playwright && cd ~/playwright

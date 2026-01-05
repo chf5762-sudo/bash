@@ -1,0 +1,109 @@
+# ==========================================
+# Playwright + noVNC 可视化一键部署脚本 (ARM/x86 通用)
+# ==========================================
+
+# 1. 准备工作目录
+cd ~
+mkdir -p ~/playwright && cd ~/playwright
+
+# 2. 编写 Dockerfile (集成所有浏览器底层依赖)
+cat << 'EOF' > Dockerfile
+FROM node:20-bullseye
+
+# 安装 X11 虚拟显示、VNC 服务及浏览器运行必备的 10 多个底层库
+RUN apt-get update && apt-get install -y \
+    xvfb x11vnc net-tools python3 git \
+    libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
+    libxrandr2 libgbm1 libasound2 libpango-1.0-0 libpangocairo-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 安装 Playwright 并下载 Chromium 内核 (ARM 兼容版)
+RUN npm install playwright
+RUN npx playwright install --with-deps chromium
+
+# 安装 noVNC 网页客户端
+RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
+    && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify \
+    && ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+
+COPY . .
+RUN chmod +x entrypoint.sh
+
+ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+EOF
+
+# 3. 编写 启动入口脚本
+cat << 'EOF' > entrypoint.sh
+#!/bin/bash
+# 启动虚拟屏幕 (1280x1024 24位色)
+Xvfb :99 -screen 0 1280x1024x24 &
+sleep 2
+
+# 启动 VNC 服务 (无密码模式)
+x11vnc -display :99 -nopw -forever -shared -bg
+
+# 启动 noVNC 网页代理 (监听 6080 端口)
+/opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+
+echo "--- 🖥️  GUI 环境已就绪，正在启动 Playwright ---"
+# 运行业务脚本
+node test.js
+wait
+EOF
+
+# 4. 编写 Docker Compose 配置
+cat << 'EOF' > docker-compose.yml
+services:
+  playwright-app:
+    build: .
+    ports:
+      - "6080:6080"
+    environment:
+      - DISPLAY=:99
+    shm_size: '2gb' # 增加共享内存，防止浏览器崩溃
+EOF
+
+# 5. 编写 示例测试脚本 (带反爬和沙盒参数)
+cat << 'EOF' > test.js
+const { chromium } = require('playwright');
+(async () => {
+  console.log('🚀 正在启动浏览器...');
+  try {
+    const browser = await chromium.launch({ 
+      headless: false, // 必须为 false 才能在 VNC 看到画面
+      args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox', 
+        '--disable-dev-shm-usage'
+      ] 
+    });
+    const page = await browser.newPage();
+    await page.setViewportSize({ width: 1280, height: 800 });
+    
+    console.log('🌐 正在打开页面...');
+    await page.goto('https://www.google.com');
+    
+    const title = await page.title();
+    console.log('✅ 成功！当前页面标题:', title);
+    console.log('📺 请访问 http://YOUR_IP:6080 查看实时画面');
+    
+    // 保持进程不退出，方便观察
+    await new Promise(() => {}); 
+  } catch (e) {
+    console.error('❌ 运行失败:', e);
+  }
+})();
+EOF
+
+# 6. 给权限并启动
+chmod +x entrypoint.sh
+docker-compose up --build -d
+
+echo "=========================================="
+echo "🎉 部署完成！"
+echo "请访问: http://$(curl -s ifconfig.me):6080"
+echo "使用 'docker-compose logs -f' 查看实时日志"
+echo "=========================================="

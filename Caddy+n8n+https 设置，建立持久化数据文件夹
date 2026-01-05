@@ -1,74 +1,48 @@
 Caddy+n8n+建立持久化数据文件夹 给与 777 权限
-
 mkdir -p ./n8n-data && chmod -R 777 ./n8n-data && docker compose up -d 
 数据持久化，必须先建立n8n-data 文件夹映射，并授予777 权限，允许docker 有权限映射，否则报错 。
-
-修改镜像名并添加语言环境变量，然后重启
-sed -i 's|image: n8nio/n8n:latest|image: deluxebear/n8n:2.0.0-chs|' docker-compose.yml && \
-sed -i '/TZ=${TZ}/a \      - N8N_DEFAULT_LOCALE=zh-CN' docker-compose.yml && \
-docker compose up -d
-
-cname n8n.buenduredig.eu.org  vps1.beundredig.eu.org
-A     vps1.beundredig.eu.org  IPV4 地址
-
-
-
-
 Caddy 配置： /etc/Caddyfile
-
-{
-    # --- 全局配置块 ---
-    # 定义 Caddy 内部通信端口，避开 80
-    http_port  8080
-    
-    # 定义 HTTPS 监听端口，避开 443
-    https_port 8443
-    
-    # 因为 80 端口被 Dify 占用或未开放，必须关闭“自动从 80 跳转到 443”的功能
-    auto_https disable_redirects 
+n8n.beundredig.eu.org {
+    reverse_proxy localhost:5678
 }
-
-# 访问地址必须带上非标准端口 8443
-n8n.beundredig.eu.org:8443 {
-    # 转发请求到 n8n 容器
-    reverse_proxy 127.0.0.1:5678
-
-    tls {
-        # 核心：使用 DNS 方式申请证书
-        # 即使 80/443 端口不通，只要 Token 正确，证书就能下发
-        dns cloudflare {env.CF_API_TOKEN}
-    }
-}
-
-# 1Panel 转发配置
-1panel-vps1.beundredig.eu.org:39391 {
-    reverse_proxy 127.0.0.1:39390
-    tls {
-        dns cloudflare {env.CF_API_TOKEN}
-    }
-}
-
-
-
 n8n dockercompose.yaml
+# 1. 进入工作目录
+cd /root/n8n-docker/
 
+# 2. 覆盖写入修正后的 docker-compose.yml (移除了所有 :8443)
+cat <<EOF > docker-compose.yml
 services:
   n8n:
-    # 替换为魔改汉化版镜像
-    image: deluxebear/n8n:2.0.0-chs
+    image: docker.n8n.io/n8nio/n8n
     container_name: n8n
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5678:5678" 
+      - "0.0.0.0:5678:5678"
     environment:
-      - N8N_HOST=${N8N_HOST}
+      - N8N_HOST=n8n.beundredig.eu.org
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
       - NODE_FUNCTION_ALLOW_EXTERNAL=moment,lodash
-      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
-      - TZ=${TZ}
-      # 强制开启中文支持
       - N8N_DEFAULT_LOCALE=zh-CN
+      - TZ=Asia/Shanghai
+      - WEBHOOK_URL=https://n8n.beundredig.eu.org/
+      - N8N_EDITOR_BASE_URL=https://n8n.beundredig.eu.org/
     volumes:
-      # 保持路径一致，确保数据不丢失
-      - ./n8n-data:/home/node/.n8n
+      - /root/n8n-docker/n8n_data:/home/node/.n8n
+    user: "node"
+EOF
+
+echo "✅ docker-compose.yml 已更新 (已去掉 :8443)"
+
+# 3. 强制停止并移除当前可能正在运行的容器
+docker compose down
+
+# 4. 重新启动
+docker compose up -d
+
+# 5. 检查状态
+echo "-----------------------------------"
+docker compose ps
+echo "-----------------------------------"
+echo "请再次尝试访问: https://n8n.beundredig.eu.org"
+

@@ -1,54 +1,69 @@
 #!/bin/bash
 
-# ==========================================
-# Playwright + noVNC (安全隐蔽版 - 需手动输入路径)
-# ==========================================
+# =================================================================
+#  Playwright + noVNC 全能管理脚本 (多账户/持久化/脚本注入)
+# =================================================================
 
-# 1. 清理旧环境
-if [ -d ~/playwright-pro ]; then
-    echo "🧹 检测到旧目录，正在清理..."
-    cd ~/playwright-pro
-    docker-compose down 2>/dev/null
-    cd ~
-fi
+BASE_DIR="$HOME/playwright-pro"
+PROFILE_DIR="$BASE_DIR/profiles"
+SCRIPT_DIR="$BASE_DIR/scripts"
+LOG_DIR="$BASE_DIR/logs"
+LAUNCHER_FILE="$BASE_DIR/launcher.js"
 
-mkdir -p ~/playwright-pro && cd ~/playwright-pro
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
 
-# 2. 编写 Dockerfile
-cat << 'EOF' > Dockerfile
+# =================================================================
+#  1. 环境安装与重置
+# =================================================================
+install_environment() {
+    echo -e "${YELLOW}正在检查环境...${NC}"
+    
+    if [ -d "$BASE_DIR" ]; then
+        read -p "⚠️  检测到旧目录，是否先执行清理并重装? [y/N]: " confirm
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+            echo "🧹 正在清理旧容器..."
+            cd "$BASE_DIR"
+            docker-compose down 2>/dev/null
+            cd ~
+            rm -rf "$BASE_DIR"
+        else
+            echo "已取消安装。"
+            return
+        fi
+    fi
+
+    echo -e "${GREEN}📂 创建目录结构...${NC}"
+    mkdir -p "$BASE_DIR" && cd "$BASE_DIR"
+    mkdir -p "$PROFILE_DIR" "$SCRIPT_DIR" "$LOG_DIR"
+
+    # --- 1.1 Dockerfile ---
+    cat << 'EOF' > Dockerfile
 FROM node:20-bullseye
-
-# 安装底层图形依赖
 RUN apt-get update && apt-get install -y \
     xvfb x11vnc net-tools python3 git \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
     libxrandr2 libgbm1 libasound2 libpango-1.0-0 libpangocairo-1.0-0 \
     && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
-
 COPY package.json .
 RUN npm install
 RUN npx playwright install --with-deps chromium
-
-# 安装 noVNC
 RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
     && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-
-# 【安全修改】
-# 1. 不再创建 vnc.html -> index.html 的软链接
-# 2. 创建一个假的 index.html 用于迷惑扫描器
+# 安全伪装：访问根路径显示403
 RUN echo '<html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1><p>Access Denied.</p></body></html>' > /opt/noVNC/index.html
-
 COPY . .
 RUN chmod +x entrypoint.sh
-
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
 EOF
 
-# 3. 编写 package.json
-cat << 'EOF' > package.json
+    # --- 1.2 package.json ---
+    cat << 'EOF' > package.json
 {
   "name": "playwright-novnc",
   "version": "1.0.0",
@@ -58,49 +73,40 @@ cat << 'EOF' > package.json
 }
 EOF
 
-# 4. 编写 启动脚本 entrypoint.sh
-cat << 'EOF' > entrypoint.sh
+    # --- 1.3 entrypoint.sh (引导脚本) ---
+    cat << 'EOF' > entrypoint.sh
 #!/bin/bash
-
 check_service() {
-    local service_name=$1
-    local check_cmd=$2
-    echo "⏳ 等待 $service_name 就绪..."
+    local service=$1
+    local cmd=$2
+    echo "⏳ 等待 $service..."
     for i in {1..30}; do
-        if eval "$check_cmd"; then
-            echo "✅ $service_name 已启动"
-            return 0
-        fi
+        if eval "$cmd"; then echo "✅ $service 就绪"; return 0; fi
         sleep 0.5
     done
-    echo "❌ $service_name 启动超时，脚本终止"
     exit 1
 }
 
-echo "🚀 [1/4] 启动 Xvfb..."
+echo "🚀 启动虚拟显卡 Xvfb..."
 Xvfb :99 -screen 0 1280x1024x24 &
 check_service "Xvfb" "xdpyinfo -display :99 >/dev/null 2>&1"
 
-echo "🚀 [2/4] 启动 x11vnc..."
+echo "🚀 启动远程桌面 x11vnc..."
 x11vnc -display :99 -nopw -forever -shared -rfbport 5900 -bg
 check_service "x11vnc" "netstat -tuln | grep -q ':5900 '"
 
-echo "🚀 [3/4] 启动 noVNC..."
+echo "🚀 启动网页代理 noVNC..."
 /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 check_service "noVNC" "netstat -tuln | grep -q ':6080 '"
 
-echo "🚀 [4/4] 启动 inject.js ..."
-node inject.js &
-
 echo "========================================"
-echo "🎉 GUI 环境已就绪"
+echo "🎉 环境启动完毕，等待 run 命令..."
 echo "========================================"
-
 tail -f /dev/null
 EOF
 
-# 5. 编写 docker-compose.yml
-cat << 'EOF' > docker-compose.yml
+    # --- 1.4 docker-compose.yml ---
+    cat << 'EOF' > docker-compose.yml
 services:
   playwright-pro:
     build: .
@@ -117,55 +123,213 @@ services:
       - /app/node_modules
 EOF
 
-# 6. 编写 业务脚本 inject.js
-cat << 'EOF' > inject.js
+    # --- 1.5 核心启动器 launcher.js (Node端) ---
+    cat << 'JS' > launcher.js
 const { chromium } = require('playwright');
+const path = require('path');
+const fs = require('fs');
+
+const accountName = process.argv[2];
+if (!accountName) { console.error('Need account name'); process.exit(1); }
+
+const userDataDir = path.join(__dirname, 'profiles', accountName);
+const scriptFile = path.join(__dirname, 'scripts', accountName + '.js');
 
 (async () => {
-  console.log('🔄 [inject.js] 启动中...');
-  try {
-    const browser = await chromium.launch({ 
-      headless: false,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'] 
-    });
-    
-    const page = await browser.newPage();
-    await page.setViewportSize({ width: 1280, height: 1024 });
+    console.log(`\n🚀 [${accountName}] 启动中...`);
+    try {
+        const context = await chromium.launchPersistentContext(userDataDir, {
+            headless: false,
+            viewport: { width: 1200, height: 800 },
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled', '--ignore-certificate-errors']
+        });
 
-    console.log('🌐 访问 Google...');
-    await page.goto('https://www.google.com');
-    console.log('✅ 页面标题:', await page.title());
-    
-    let count = 0;
-    setInterval(async () => {
-        count++;
-        console.log(`💓 [inject.js] 运行中... (${count})`);
-    }, 5000);
+        const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
 
-  } catch (e) {
-    console.error('❌ 运行出错:', e);
-  }
+        // --- 核心：热更新注入逻辑 ---
+        const injectLogic = async () => {
+             if (fs.existsSync(scriptFile)) {
+                try {
+                    const jsContent = fs.readFileSync(scriptFile, 'utf8');
+                    console.log(`💉 注入脚本: scripts/${accountName}.js`);
+                    await page.evaluate(jsContent);
+                } catch (err) { console.error(`⚠️ 注入失败:`, err.message); }
+            }
+        };
+
+        // 1. 页面加载完成时注入
+        page.on('domcontentloaded', injectLogic);
+        
+        // 2. 初次运行检测
+        if (!fs.existsSync(scriptFile)) console.log(`⚠️ 未找到脚本: ${scriptFile}`);
+
+        console.log('🌐 打开 Google...');
+        await page.goto('https://accounts.google.com', { timeout: 60000 });
+        
+        // 保持运行
+        await new Promise(() => {});
+
+    } catch (e) { console.error(`❌ Error:`, e); }
 })();
-EOF
+JS
 
-# 7. 启动
-chmod +x entrypoint.sh
-echo "---------------------------------------------"
-echo "⚙️  正在重新构建 (应用安全策略)..."
-echo "---------------------------------------------"
+    chmod +x entrypoint.sh
+    
+    echo -e "${YELLOW}⚙️  开始构建 Docker 镜像 (首次需要几分钟)...${NC}"
+    docker-compose up --build -d
+    
+    echo ""
+    echo -e "${GREEN}✅ 部署完成！${NC}"
+    echo "按回车键返回菜单..."
+    read
+}
 
-if docker-compose up --build -d; then
-    IP=$(curl -s ifconfig.me)
-    echo ""
-    echo "============================================="
-    echo "✅ 部署成功！"
-    echo ""
-    echo "⛔️ 直接访问 IP:6080 将显示 403 Forbidden"
-    echo ""
-    echo "🔐 正确访问地址 (请收藏):"
-    echo "   http://$IP:6080/vnc.html"
-    echo ""
-    echo "============================================="
-else
-    echo "❌ 部署失败"
-fi
+# =================================================================
+#  2. 启动/新建 账号
+# =================================================================
+run_account() {
+    check_install || return
+
+    echo "========================================"
+    echo "  🚀 启动/新建 账号"
+    echo "========================================"
+    echo "现有账号:"
+    ls "$PROFILE_DIR" 2>/dev/null | xargs -n 1 echo "   👤 " || echo "   (无)"
+    echo "----------------------------------------"
+    read -p "👉 请输入账号名称 (如 user1): " ACCOUNT
+
+    if [ -z "$ACCOUNT" ]; then echo -e "${RED}名称不能为空${NC}"; return; fi
+
+    # 1. 自动生成脚本模板
+    SCRIPT_PATH="$SCRIPT_DIR/${ACCOUNT}.js"
+    if [ ! -f "$SCRIPT_PATH" ]; then
+        echo -e "${GREEN}📄 新建注入脚本: $SCRIPT_PATH${NC}"
+        cat << TEMPLATE > "$SCRIPT_PATH"
+// [${ACCOUNT}] 专属脚本
+// 修改此文件保存后，在 VNC 浏览器点击【刷新】即可生效
+console.log("%c 🚀 ${ACCOUNT} 脚本注入成功!", "color:green; font-size:16px");
+document.body.style.border = "5px solid green";
+TEMPLATE
+    fi
+
+    # 2. 检查是否已运行
+    if docker-compose exec -T playwright-pro pgrep -f "launcher.js $ACCOUNT" >/dev/null; then
+        echo -e "${YELLOW}⚠️  该账号已经在运行中！${NC}"
+        read -p "是否重启? (y/n): " restart
+        if [[ "$restart" == "y" ]]; then
+            docker-compose exec -T playwright-pro pkill -f "launcher.js $ACCOUNT"
+            sleep 1
+        else
+            return
+        fi
+    fi
+
+    # 3. 发送启动指令
+    echo "🚀 正在后台启动..."
+    docker-compose exec -d playwright-pro bash -c "nohup node launcher.js $ACCOUNT > logs/${ACCOUNT}.log 2>&1 &"
+    
+    sleep 2
+    echo -e "${GREEN}✅ 启动成功！${NC}"
+    echo "----------------------------------------"
+    echo "📺 VNC 地址: http://$(curl -s ifconfig.me):6080/vnc.html"
+    echo "📝 修改脚本: vim $BASE_DIR/scripts/${ACCOUNT}.js"
+    echo "📜 查看日志: tail -f $BASE_DIR/logs/${ACCOUNT}.log"
+    echo "----------------------------------------"
+    read -p "按回车键继续..."
+}
+
+# =================================================================
+#  3. 删除/清理 账号
+# =================================================================
+delete_account() {
+    check_install || return
+
+    echo "========================================"
+    echo "  🗑️  删除账号 (慎用)"
+    echo "========================================"
+    ls "$PROFILE_DIR" 2>/dev/null | xargs -n 1 echo "   📂 " || echo "   (无)"
+    echo "----------------------------------------"
+    read -p "👉 输入要删除的账号名: " ACCOUNT
+
+    if [ -z "$ACCOUNT" ] || [ ! -d "$PROFILE_DIR/$ACCOUNT" ]; then
+        echo -e "${RED}找不到该账号${NC}"; return
+    fi
+
+    echo -e "${RED}⚠️  警告：将永久删除 [$ACCOUNT] 的所有数据(Cookie/脚本/日志)${NC}"
+    read -p "🔴 确认删除? (输入 y 确认): " confirm
+    if [[ "$confirm" != "y" ]]; then echo "取消"; return; fi
+
+    # 1. 杀进程
+    docker-compose exec -T playwright-pro pkill -f "launcher.js $ACCOUNT" 2>/dev/null
+
+    # 2. 删文件
+    rm -rf "$PROFILE_DIR/$ACCOUNT"
+    rm -f "$SCRIPT_DIR/${ACCOUNT}.js"
+    rm -f "$LOG_DIR/${ACCOUNT}.log"
+
+    echo -e "${GREEN}✅ 账号 [$ACCOUNT] 已彻底清除${NC}"
+    read -p "按回车键继续..."
+}
+
+# =================================================================
+#  辅助函数
+# =================================================================
+check_install() {
+    if [ ! -d "$BASE_DIR" ]; then
+        echo -e "${RED}❌ 未检测到安装目录，请先执行 [1] 安装部署${NC}"
+        read -p "按回车键返回..."
+        return 1
+    fi
+    cd "$BASE_DIR"
+}
+
+view_logs() {
+    check_install || return
+    echo "现有日志:"
+    ls "$LOG_DIR" 2>/dev/null
+    read -p "输入账号名查看日志: " acc
+    if [ -f "$LOG_DIR/${acc}.log" ]; then
+        tail -f "$LOG_DIR/${acc}.log"
+    else
+        echo "无日志文件"
+    fi
+}
+
+show_status() {
+    check_install || return
+    echo "========================================"
+    echo "  运行状态监控"
+    echo "========================================"
+    echo "正在运行的浏览器实例:"
+    docker-compose exec -T playwright-pro ps -ef | grep "launcher.js" | grep -v grep | awk '{print "   🟢 " $9 " (PID: " $2 ")"}' | sed 's/.*\///'
+    echo "----------------------------------------"
+    read -p "按回车键返回..."
+}
+
+# =================================================================
+#  主菜单
+# =================================================================
+while true; do
+    clear
+    echo "========================================"
+    echo "  Playwright + noVNC 管理系统"
+    echo "========================================"
+    echo "1. 🛠️  一键安装部署 (环境重置)"
+    echo "2. 🚀 启动/新建 账号 (自动创建脚本)"
+    echo "3. 🗑️  删除账号 (清理所有数据)"
+    echo "4. 📜 查看日志"
+    echo "5. 📊 查看运行状态"
+    echo "0. 🚪 退出"
+    echo "========================================"
+    read -p "请选择 [0-5]: " choice
+
+    case $choice in
+        1) install_environment ;;
+        2) run_account ;;
+        3) delete_account ;;
+        4) view_logs ;;
+        5) show_status ;;
+        0) exit 0 ;;
+        *) echo "无效选择" ;;
+    esac
+done

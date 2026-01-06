@@ -1,17 +1,24 @@
+#!/bin/bash
+
 # ==========================================
-# Playwright + noVNC 可视化一键部署脚本 (ARM/x86 通用)
+# Playwright + noVNC (安全隐蔽版 - 需手动输入路径)
 # ==========================================
 
+# 1. 清理旧环境
+if [ -d ~/playwright-pro ]; then
+    echo "🧹 检测到旧目录，正在清理..."
+    cd ~/playwright-pro
+    docker-compose down 2>/dev/null
+    cd ~
+fi
 
-# 1. 准备工作目录
-cd ~
-mkdir -p ~/playwright && cd ~/playwright
+mkdir -p ~/playwright-pro && cd ~/playwright-pro
 
-# 2. 编写 Dockerfile (集成所有浏览器底层依赖)
+# 2. 编写 Dockerfile
 cat << 'EOF' > Dockerfile
 FROM node:20-bullseye
 
-# 安装 X11 虚拟显示、VNC 服务及浏览器运行必备的 10 多个底层库
+# 安装底层图形依赖
 RUN apt-get update && apt-get install -y \
     xvfb x11vnc net-tools python3 git \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
@@ -21,14 +28,18 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 安装 Playwright 并下载 Chromium 内核 (ARM 兼容版)
-RUN npm install playwright
+COPY package.json .
+RUN npm install
 RUN npx playwright install --with-deps chromium
 
-# 安装 noVNC 网页客户端
+# 安装 noVNC
 RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
-    && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify \
-    && ln -s /opt/noVNC/vnc.html /opt/noVNC/index.html
+    && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
+
+# 【安全修改】
+# 1. 不再创建 vnc.html -> index.html 的软链接
+# 2. 创建一个假的 index.html 用于迷惑扫描器
+RUN echo '<html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1><p>Access Denied.</p></body></html>' > /opt/noVNC/index.html
 
 COPY . .
 RUN chmod +x entrypoint.sh
@@ -36,75 +47,125 @@ RUN chmod +x entrypoint.sh
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
 EOF
 
-# 3. 编写 启动入口脚本
-cat << 'EOF' > entrypoint.sh
-#!/bin/bash
-# 启动虚拟屏幕 (1280x1024 24位色)
-Xvfb :99 -screen 0 1280x1024x24 &
-sleep 2
-
-# 启动 VNC 服务 (无密码模式)
-x11vnc -display :99 -nopw -forever -shared -bg
-
-# 启动 noVNC 网页代理 (监听 6080 端口)
-/opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
-
-echo "--- 🖥️  GUI 环境已就绪，正在启动 Playwright ---"
-# 运行业务脚本
-node test.js
-wait
+# 3. 编写 package.json
+cat << 'EOF' > package.json
+{
+  "name": "playwright-novnc",
+  "version": "1.0.0",
+  "dependencies": {
+    "playwright": "latest"
+  }
+}
 EOF
 
-# 4. 编写 Docker Compose 配置
+# 4. 编写 启动脚本 entrypoint.sh
+cat << 'EOF' > entrypoint.sh
+#!/bin/bash
+
+check_service() {
+    local service_name=$1
+    local check_cmd=$2
+    echo "⏳ 等待 $service_name 就绪..."
+    for i in {1..30}; do
+        if eval "$check_cmd"; then
+            echo "✅ $service_name 已启动"
+            return 0
+        fi
+        sleep 0.5
+    done
+    echo "❌ $service_name 启动超时，脚本终止"
+    exit 1
+}
+
+echo "🚀 [1/4] 启动 Xvfb..."
+Xvfb :99 -screen 0 1280x1024x24 &
+check_service "Xvfb" "xdpyinfo -display :99 >/dev/null 2>&1"
+
+echo "🚀 [2/4] 启动 x11vnc..."
+x11vnc -display :99 -nopw -forever -shared -rfbport 5900 -bg
+check_service "x11vnc" "netstat -tuln | grep -q ':5900 '"
+
+echo "🚀 [3/4] 启动 noVNC..."
+/opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
+check_service "noVNC" "netstat -tuln | grep -q ':6080 '"
+
+echo "🚀 [4/4] 启动 inject.js ..."
+node inject.js &
+
+echo "========================================"
+echo "🎉 GUI 环境已就绪"
+echo "========================================"
+
+tail -f /dev/null
+EOF
+
+# 5. 编写 docker-compose.yml
 cat << 'EOF' > docker-compose.yml
 services:
-  playwright-app:
+  playwright-pro:
     build: .
+    container_name: playwright_pro
+    restart: always
     ports:
       - "6080:6080"
     environment:
       - DISPLAY=:99
-    shm_size: '2gb' # 增加共享内存，防止浏览器崩溃
+      - TZ=Asia/Shanghai
+    shm_size: '2gb'
+    volumes:
+      - ./:/app
+      - /app/node_modules
 EOF
 
-# 5. 编写 示例测试脚本 (带反爬和沙盒参数)
-cat << 'EOF' > test.js
+# 6. 编写 业务脚本 inject.js
+cat << 'EOF' > inject.js
 const { chromium } = require('playwright');
+
 (async () => {
-  console.log('🚀 正在启动浏览器...');
+  console.log('🔄 [inject.js] 启动中...');
   try {
     const browser = await chromium.launch({ 
-      headless: false, // 必须为 false 才能在 VNC 看到画面
-      args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox', 
-        '--disable-dev-shm-usage'
-      ] 
+      headless: false,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'] 
     });
+    
     const page = await browser.newPage();
-    await page.setViewportSize({ width: 1280, height: 800 });
-    
-    console.log('🌐 正在打开页面...');
+    await page.setViewportSize({ width: 1280, height: 1024 });
+
+    console.log('🌐 访问 Google...');
     await page.goto('https://www.google.com');
+    console.log('✅ 页面标题:', await page.title());
     
-    const title = await page.title();
-    console.log('✅ 成功！当前页面标题:', title);
-    console.log('📺 请访问 http://YOUR_IP:6080 查看实时画面');
-    
-    // 保持进程不退出，方便观察
-    await new Promise(() => {}); 
+    let count = 0;
+    setInterval(async () => {
+        count++;
+        console.log(`💓 [inject.js] 运行中... (${count})`);
+    }, 5000);
+
   } catch (e) {
-    console.error('❌ 运行失败:', e);
+    console.error('❌ 运行出错:', e);
   }
 })();
 EOF
 
-# 6. 给权限并启动
+# 7. 启动
 chmod +x entrypoint.sh
-docker-compose up --build -d
+echo "---------------------------------------------"
+echo "⚙️  正在重新构建 (应用安全策略)..."
+echo "---------------------------------------------"
 
-echo "=========================================="
-echo "🎉 部署完成！"
-echo "请访问: http://$(curl -s ifconfig.me):6080"
-echo "使用 'docker-compose logs -f' 查看实时日志"
-echo "=========================================="
+if docker-compose up --build -d; then
+    IP=$(curl -s ifconfig.me)
+    echo ""
+    echo "============================================="
+    echo "✅ 部署成功！"
+    echo ""
+    echo "⛔️ 直接访问 IP:6080 将显示 403 Forbidden"
+    echo ""
+    echo "🔐 正确访问地址 (请收藏):"
+    echo "   http://$IP:6080/vnc.html"
+    echo ""
+    echo "============================================="
+else
+    echo "❌ 部署失败"
+fi

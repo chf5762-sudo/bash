@@ -1,0 +1,69 @@
+# ==================================================
+# Gost SOCKS5 智能安装脚本 (自动适配架构 + 自动卸载旧版)
+# ==================================================
+
+echo "1. 正在清理旧环境..."
+systemctl stop gost >/dev/null 2>&1
+systemctl disable gost >/dev/null 2>&1
+rm -f /usr/bin/gost
+rm -f /etc/systemd/system/gost.service
+systemctl daemon-reload
+
+echo "2. 正在检测 CPU 架构..."
+ARCH=$(uname -m)
+if [ "$ARCH" = "x86_64" ]; then
+    echo "检测到架构: AMD64 (x86_64)"
+    URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
+    FILENAME="gost-linux-amd64-2.11.5.gz"
+    UNZIPNAME="gost-linux-amd64-2.11.5"
+elif [ "$ARCH" = "aarch64" ]; then
+    echo "检测到架构: ARM64 (aarch64)"
+    URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-armv8-2.11.5.gz"
+    FILENAME="gost-linux-armv8-2.11.5.gz"
+    UNZIPNAME="gost-linux-armv8-2.11.5"
+else
+    echo "不支持的架构: $ARCH"
+    exit 1
+fi
+
+echo "3. 正在下载并安装..."
+# 安装 wget 和 gzip 如果没有的话
+if [ -f /etc/redhat-release ]; then
+    yum install -y wget gzip
+else
+    apt-get update -y >/dev/null 2>&1 && apt-get install -y wget gzip
+fi
+
+wget -N --no-check-certificate "$URL"
+gzip -d "$FILENAME"
+mv "$UNZIPNAME" /usr/bin/gost
+chmod +x /usr/bin/gost
+
+echo "4. 配置开机自启服务..."
+cat > /etc/systemd/system/gost.service <<EOF
+[Unit]
+Description=Gost Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+# 核心启动命令：Socks5模式，监听1080端口
+ExecStart=/usr/bin/gost -L=socks5://:1080
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "5. 启动服务..."
+systemctl daemon-reload
+systemctl enable gost
+systemctl start gost
+
+echo "================================================="
+echo "✅ 修复安装完成！"
+echo "✅ 运行状态如下 (看到绿色 active (running) 即成功):"
+echo "================================================="
+systemctl status gost --no-pager

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Playwright 修复版 (绝对路径解决密码错误)
+# Playwright 修复版 V5 (绝对路径 + Hot Reload 热重载)
 # ====================================================
 
 BASE_DIR="$HOME/playwright"
@@ -9,7 +9,7 @@ mkdir -p "$BASE_DIR/base"
 mkdir -p "$BASE_DIR/workspaces"
 
 # ----------------------------------------------------
-# 1. Dockerfile
+# 1. Dockerfile (新增 nodemon)
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/base/Dockerfile"
 FROM node:20-bullseye
@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 COPY package.json .
 RUN npm install
+# 🔥 新增：安装 nodemon 用于热重载
+RUN npm install -g nodemon
 RUN npx playwright install --with-deps chromium
 
 RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
@@ -52,7 +54,7 @@ cat << 'EOF' > "$BASE_DIR/base/package.json"
 EOF
 
 # ----------------------------------------------------
-# 3. entrypoint.sh (🔴 核心修复：使用绝对路径)
+# 3. entrypoint.sh (🔥 核心改动：使用 nodemon)
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/base/entrypoint.sh"
 #!/bin/bash
@@ -73,14 +75,11 @@ check_service() {
 }
 
 echo "🚀 [1/5] 配置 VNC 密码..."
-# 🔴 修复：使用绝对路径 /app/vnc_pass，避免 ~ 符号展开失败
 PASS_FILE="/app/vnc_pass"
 
 if [ -n "$VNC_PASSWORD" ]; then
     echo "🔐 正在生成密码文件..."
-    # 确保没有旧文件干扰
     rm -f "$PASS_FILE"
-    # 写入密码
     x11vnc -storepasswd "$VNC_PASSWORD" "$PASS_FILE"
     chmod 600 "$PASS_FILE"
     AUTH_ARG="-rfbauth $PASS_FILE"
@@ -94,7 +93,6 @@ Xvfb :99 -screen 0 1280x1024x24 &
 check_service "Xvfb" "xdpyinfo -display :99 >/dev/null 2>&1"
 
 echo "🚀 [3/5] 启动 x11vnc..."
-# 使用修复后的绝对路径参数
 x11vnc -display :99 $AUTH_ARG -forever -shared -rfbport 5900 -bg
 check_service "x11vnc" "netstat -tuln | grep -q ':5900 '"
 
@@ -102,9 +100,12 @@ echo "🚀 [4/5] 启动 noVNC..."
 /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 check_service "noVNC" "netstat -tuln | grep -q ':6080 '"
 
-echo "🚀 [5/5] 启动 Stealth 脚本..."
+echo "🚀 [5/5] 启动 Stealth 脚本 (Hot Reload)..."
 if [ -f "inject.js" ]; then
-    node inject.js &
+    # 🔥 核心改动：使用 nodemon -L (Legacy Watch) 启动
+    # -L 强制轮询，解决 Docker 挂载卷文件事件不触发的问题
+    echo "👀 正在监听 inject.js 变化..."
+    nodemon -L inject.js &
 else
     echo "⚠️ 未找到 inject.js"
 fi
@@ -113,21 +114,21 @@ tail -f /dev/null
 EOF
 
 # ----------------------------------------------------
-# 4. manager.sh
+# 4. manager.sh (生成带热重载处理的 JS 模板)
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/manager.sh"
 #!/bin/bash
 
 BASE_DIR="$HOME/playwright"
 WORKSPACES="$BASE_DIR/workspaces"
-IMAGE_NAME="playwright-fix-pass-v4" # 强制更新镜像名
+IMAGE_NAME="playwright-hot-reload-v5" # 更新镜像名
 GREEN='\033[0;32m'
 NC='\033[0m'
 DEFAULT_PASS="password"
 
 build_image() {
     if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]] || [[ "$1" == "force" ]]; then
-        echo -e "${GREEN}⚙️  正在构建修复版镜像...${NC}"
+        echo -e "${GREEN}⚙️  正在构建支持热重载的镜像...${NC}"
         cd "$BASE_DIR/base"
         docker build -t $IMAGE_NAME .
     fi
@@ -173,28 +174,53 @@ services:
       - ./user_data:/app/user_data
 YML
 
+    # 🔥 优化 JS 模板：处理热重载信号，优雅关闭浏览器
     cat << JS > "$TARGET_DIR/inject.js"
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealth);
 
+let context;
+
 (async () => {
-  console.log('🕵️ [Secure Mode] 用户: $USER_NAME 启动中...');
+  console.log('🔄 [Hot Reload] 脚本启动: $USER_NAME');
   const userDataDir = '/app/user_data';
+  
   try {
-    const context = await chromium.launchPersistentContext(userDataDir, { 
+    // 启动浏览器
+    context = await chromium.launchPersistentContext(userDataDir, { 
       headless: false,
       viewport: { width: 1280, height: 1024 },
       args: ['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-setuid-sandbox'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
+
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
     await page.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
+    
+    // --- 可以在此处修改目标 URL 并保存，浏览器会自动重启加载 ---
     await page.goto('https://www.google.com');
-    console.log('✅ Title: ' + await page.title());
+    
+    console.log('✅ 页面标题: ' + await page.title());
+    
+    // 保持进程活跃
     setInterval(() => {}, 10000); 
-  } catch (e) { console.error(e); }
+
+  } catch (e) { 
+    console.error('❌ Error:', e); 
+  }
 })();
+
+// 🔥 处理 nodemon 重启信号 (SIGUSR2)
+// 必须在重启前关闭浏览器，否则下次启动会报 User Data Dir 锁定错误
+process.once('SIGUSR2', async () => {
+  if (context) {
+    console.log('🛑 检测到代码修改，正在关闭旧浏览器实例...');
+    await context.close();
+    context = null;
+  }
+  process.kill(process.pid, 'SIGUSR2');
+});
 JS
 
     cd "$TARGET_DIR" && docker-compose up -d >/dev/null 2>&1
@@ -238,8 +264,7 @@ chmod +x "$BASE_DIR/manager.sh"
 # 5. 清理与重建
 # ====================================================
 
-echo "🧹 正在清理旧容器以应用修复..."
-# 必须先删掉旧的容器，否则它还是用的旧镜像和旧逻辑
+echo "🧹 正在清理旧容器以应用热重载补丁..."
 if [ -d "$BASE_DIR/workspaces/default" ]; then
     cd "$BASE_DIR/workspaces/default" && docker-compose down 2>/dev/null
     cd "$BASE_DIR"
@@ -253,9 +278,13 @@ echo "🔄 重新构建并启动..."
 IP=$(curl -s ifconfig.me)
 echo ""
 echo "==========================================="
-echo "✅ 密码逻辑已修复！"
+echo "✅ 热重载模式已就绪！"
 echo "==========================================="
-echo "请再次尝试连接："
-echo "   ➜ http://$IP:6080/vnc.html"
-echo "   🔑 密码: password"
+echo "现在，当你修改 $HOME/playwright/workspaces/default/inject.js 时："
+echo "1. 保存文件"
+echo "2. 容器内的进程会自动重启"
+echo "3. VNC 界面中的浏览器会自动重新打开"
+echo ""
+echo "访问地址: http://$IP:6080/vnc.html"
+echo "密码: password"
 echo "==========================================="

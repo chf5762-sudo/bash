@@ -1,66 +1,65 @@
 #!/bin/bash
 
-# ==========================================
-# Playwright + noVNC (安全隐蔽 + 持久化版)
-# ==========================================
+# ====================================================
+# Playwright 多用户版 (隐匿增强 + 过 Google 检测)
+# ====================================================
 
-# 1. 清理旧环境
-if [ -d ~/playwright-pro ]; then
-    echo "🧹 检测到旧目录，正在清理..."
-    cd ~/playwright-pro
-    docker-compose down 2>/dev/null
-    cd ~
-fi
+BASE_DIR="$HOME/playwright"
+mkdir -p "$BASE_DIR/base"
+mkdir -p "$BASE_DIR/workspaces"
 
-mkdir -p ~/playwright-pro && cd ~/playwright-pro
-
-# 创建本地数据目录 (用于持久化)
-mkdir -p user_data
-
-# 2. 编写 Dockerfile (保持不变)
-cat << 'EOF' > Dockerfile
+# ----------------------------------------------------
+# 1. 升级 Dockerfile (增加字体库 + 隐匿插件)
+# ----------------------------------------------------
+cat << 'EOF' > "$BASE_DIR/base/Dockerfile"
 FROM node:20-bullseye
 
-# 安装底层图形依赖
+# 1. 安装系统依赖 + 常用字体 (过 Canvas 指纹检测的关键)
+# fonts-liberation, fonts-noto, ttf-wqy-zenhei (中文字体)
 RUN apt-get update && apt-get install -y \
     xvfb x11vnc net-tools python3 git \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
     libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
     libxrandr2 libgbm1 libasound2 libpango-1.0-0 libpangocairo-1.0-0 \
+    fonts-liberation fonts-noto-cjk ttf-wqy-zenhei fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package.json .
+# 2. 安装 Playwright 及 Stealth 插件
 RUN npm install
 RUN npx playwright install --with-deps chromium
 
-# 安装 noVNC
+# 3. 安装 noVNC
 RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
     && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
-
-# 【安全修改】
 RUN echo '<html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1><p>Access Denied.</p></body></html>' > /opt/noVNC/index.html
 
-COPY . .
+COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
 EOF
 
-# 3. 编写 package.json (保持不变)
-cat << 'EOF' > package.json
+# ----------------------------------------------------
+# 2. 升级 package.json (引入 playwright-extra)
+# ----------------------------------------------------
+cat << 'EOF' > "$BASE_DIR/base/package.json"
 {
-  "name": "playwright-novnc",
-  "version": "1.0.0",
+  "name": "playwright-stealth-base",
   "dependencies": {
-    "playwright": "latest"
+    "playwright": "latest",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
 EOF
 
-# 4. 编写 启动脚本 entrypoint.sh (保持不变)
-cat << 'EOF' > entrypoint.sh
+# ----------------------------------------------------
+# 3. entrypoint.sh (保持严格的连接检查逻辑)
+# ----------------------------------------------------
+cat << 'EOF' > "$BASE_DIR/base/entrypoint.sh"
 #!/bin/bash
 
 check_service() {
@@ -74,7 +73,7 @@ check_service() {
         fi
         sleep 0.5
     done
-    echo "❌ $service_name 启动超时，脚本终止"
+    echo "❌ $service_name 启动超时"
     exit 1
 }
 
@@ -90,88 +89,179 @@ echo "🚀 [3/4] 启动 noVNC..."
 /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 check_service "noVNC" "netstat -tuln | grep -q ':6080 '"
 
-echo "🚀 [4/4] 启动 inject.js (持久化模式)..."
-node inject.js &
-
-echo "========================================"
-echo "🎉 GUI 环境已就绪 (数据已持久化)"
-echo "========================================"
+echo "🚀 [4/4] 启动 Stealth 脚本..."
+if [ -f "inject.js" ]; then
+    node inject.js &
+else
+    echo "⚠️ 未找到 inject.js"
+fi
 
 tail -f /dev/null
 EOF
 
-# 5. 编写 docker-compose.yml (🔴 已修改：增加 user_data 映射)
-cat << 'EOF' > docker-compose.yml
+# ----------------------------------------------------
+# 4. 升级 manager.sh (注入隐匿代码模板)
+# ----------------------------------------------------
+cat << 'EOF' > "$BASE_DIR/manager.sh"
+#!/bin/bash
+
+BASE_DIR="$HOME/playwright"
+WORKSPACES="$BASE_DIR/workspaces"
+# 修改镜像名以强制更新
+IMAGE_NAME="playwright-stealth-v2"
+GREEN='\033[0;32m'
+NC='\033[0m'
+
+build_image() {
+    if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]] || [[ "$1" == "force" ]]; then
+        echo -e "${GREEN}⚙️  正在构建隐匿版镜像 (需下载字体和插件，时间稍长)...${NC}"
+        cd "$BASE_DIR/base"
+        docker build -t $IMAGE_NAME .
+    fi
+}
+
+get_next_port() {
+    local max_port=6080
+    for file in "$WORKSPACES"/*/docker-compose.yml; do
+        if [ -f "$file" ]; then
+            curr=$(grep -oP '(?<=- ")\d+(?=:6080")' "$file" | head -n 1)
+            if [[ "$curr" -gt "$max_port" ]]; then max_port=$curr; fi
+        fi
+    done
+    echo $((max_port + 1))
+}
+
+generate_workspace() {
+    local USER_NAME=$1
+    local PORT=$2
+    TARGET_DIR="$WORKSPACES/$USER_NAME"
+    
+    if [ -d "$TARGET_DIR" ]; then echo "用户存在"; return; fi
+
+    echo -e "${GREEN}🔨 创建隐匿用户: $USER_NAME ($PORT)${NC}"
+    mkdir -p "$TARGET_DIR/user_data"
+
+    cat << YML > "$TARGET_DIR/docker-compose.yml"
 services:
-  playwright-pro:
-    build: .
-    container_name: playwright_pro
+  app:
+    image: $IMAGE_NAME
+    container_name: pw_${USER_NAME}
     restart: always
     ports:
-      - "6080:6080"
+      - "${PORT}:6080"
     environment:
       - DISPLAY=:99
       - TZ=Asia/Shanghai
     shm_size: '2gb'
     volumes:
-      - ./:/app              # 代码映射
-      - /app/node_modules    # 保护 node_modules
-      - ./user_data:/app/user_data  # 🔴 数据持久化映射
-EOF
+      - ./inject.js:/app/inject.js
+      - ./user_data:/app/user_data
+YML
 
-# 6. 编写 业务脚本 inject.js (🔴 已修改：使用 launchPersistentContext)
-cat << 'EOF' > inject.js
-const { chromium } = require('playwright');
+    # ==========================================
+    # 核心修改：inject.js 引入 Stealth 逻辑
+    # ==========================================
+    cat << JS > "$TARGET_DIR/inject.js"
+// 使用 playwright-extra 包装器
+const { chromium } = require('playwright-extra');
+const stealth = require('puppeteer-extra-plugin-stealth')();
+
+// 加载隐匿插件
+chromium.use(stealth);
 
 (async () => {
-  console.log('🔄 [inject.js] 启动中 (持久化模式)...');
-  
-  // 定义数据存储路径 (对应 docker-compose 中的映射路径)
+  console.log('🕵️ [Stealth Mode] 用户: $USER_NAME 启动中...');
   const userDataDir = '/app/user_data';
-
+  
   try {
-    // 🔴 改动点：使用 launchPersistentContext 替代 launch
     const context = await chromium.launchPersistentContext(userDataDir, { 
       headless: false,
-      viewport: { width: 1280, height: 1024 }, // 持久化模式下 viewport 需要在这里设置
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--ignore-certificate-errors'] 
+      viewport: { width: 1280, height: 1024 },
+      // 关键参数：禁用自动化控制特征
+      args: [
+        '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-setuid-sandbox'
+      ],
+      // 模拟真实 User-Agent (Win10 Chrome)
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
     
-    // 持久化模式默认会打开一个页面，或者我们获取现有的
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-
-    console.log('🌐 访问 Google...');
-    await page.goto('https://www.google.com');
-    console.log('✅ 页面标题:', await page.title());
     
-    let count = 0;
-    setInterval(async () => {
-        count++;
-        console.log(`💓 [inject.js] 运行中... (${count})`);
-    }, 5000);
+    // 注入 webdriver 属性移除 (双重保险)
+    await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined,
+        });
+    });
 
-  } catch (e) {
-    console.error('❌ 运行出错:', e);
-  }
+    console.log('🌐 正在访问 Google 检测点...');
+    await page.goto('https://www.google.com');
+    
+    console.log('✅ Title: ' + await page.title());
+    
+    // 防止进程退出
+    setInterval(() => {}, 10000); 
+
+  } catch (e) { console.error(e); }
 })();
+JS
+
+    cd "$TARGET_DIR" && docker-compose up -d >/dev/null 2>&1
+    IP=$(curl -s ifconfig.me)
+    echo -e "✅ 启动: http://$IP:$PORT/vnc.html"
+}
+
+create_default() {
+    build_image
+    if [ ! -d "$WORKSPACES/default" ]; then generate_workspace "default" "6080"; fi
+}
+add_new_user() {
+    build_image
+    generate_workspace "$1" "$(get_next_port)"
+}
+delete_user() {
+    TARGET_DIR="$WORKSPACES/$1"
+    [ -d "$TARGET_DIR" ] && (cd "$TARGET_DIR" && docker-compose down >/dev/null 2>&1; cd .. && rm -rf "$TARGET_DIR"; echo "已删除")
+}
+list_users() {
+    for dir in "$WORKSPACES"/*/; do [ -d "$dir" ] && echo "$(basename "$dir")"; done
+}
+
+case "$1" in
+    init)  create_default ;;
+    add)   add_new_user "$2" ;;
+    del)   delete_user "$2" ;;
+    list)  list_users ;;
+    build) build_image force ;;
+esac
 EOF
 
-# 7. 启动
-chmod +x entrypoint.sh
-echo "---------------------------------------------"
-echo "⚙️  正在重新构建 (已启用数据持久化)..."
-echo "---------------------------------------------"
+chmod +x "$BASE_DIR/manager.sh"
 
-if docker-compose up --build -d; then
-    IP=$(curl -s ifconfig.me)
-    echo ""
-    echo "============================================="
-    echo "✅ 部署成功！"
-    echo "📂 数据存储目录: ~/playwright-pro/user_data"
-    echo ""
-    echo "⛔️ 伪装地址 (403): http://$IP:6080/"
-    echo "🔐 真实地址 (VNC): http://$IP:6080/vnc.html"
-    echo "============================================="
-else
-    echo "❌ 部署失败"
+# ====================================================
+# 5. 执行清理并应用新镜像
+# ====================================================
+
+echo "🧹 正在清理旧容器以应用 Stealth 补丁..."
+if [ -d "$BASE_DIR/workspaces/default" ]; then
+    cd "$BASE_DIR/workspaces/default" && docker-compose down 2>/dev/null
 fi
+
+echo "🔄 正在构建隐匿版环境 (这步会下载字体和插件，请耐心等待)..."
+"$BASE_DIR/manager.sh" build force
+"$BASE_DIR/manager.sh" init
+
+IP=$(curl -s ifconfig.me)
+echo ""
+echo "==========================================="
+echo "🕵️  隐匿版 (Stealth) 部署成功！"
+echo "==========================================="
+echo "1. 默认账户 (6080) 已应用反爬策略。"
+echo "   ➜ http://$IP:6080/vnc.html"
+echo ""
+echo "2. 验证伪装效果："
+echo "   请在 VNC 浏览器中访问 https://bot.sannysoft.com/"
+echo "   你应该能看到 WebDriver 项为 'missing' (绿色)。"
+echo "==========================================="

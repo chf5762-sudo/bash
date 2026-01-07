@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ====================================================
-# Playwright 多用户版 (隐匿增强 + 过 Google 检测)
+# Playwright 修复版 (绝对路径解决密码错误)
 # ====================================================
 
 BASE_DIR="$HOME/playwright"
@@ -9,13 +9,11 @@ mkdir -p "$BASE_DIR/base"
 mkdir -p "$BASE_DIR/workspaces"
 
 # ----------------------------------------------------
-# 1. 升级 Dockerfile (增加字体库 + 隐匿插件)
+# 1. Dockerfile
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/base/Dockerfile"
 FROM node:20-bullseye
 
-# 1. 安装系统依赖 + 常用字体 (过 Canvas 指纹检测的关键)
-# fonts-liberation, fonts-noto, ttf-wqy-zenhei (中文字体)
 RUN apt-get update && apt-get install -y \
     xvfb x11vnc net-tools python3 git \
     libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
@@ -25,13 +23,10 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
 COPY package.json .
-# 2. 安装 Playwright 及 Stealth 插件
 RUN npm install
 RUN npx playwright install --with-deps chromium
 
-# 3. 安装 noVNC
 RUN git clone https://github.com/novnc/noVNC.git /opt/noVNC \
     && git clone https://github.com/novnc/websockify /opt/noVNC/utils/websockify
 RUN echo '<html><head><title>403 Forbidden</title></head><body><h1>403 Forbidden</h1><p>Access Denied.</p></body></html>' > /opt/noVNC/index.html
@@ -43,7 +38,7 @@ ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
 EOF
 
 # ----------------------------------------------------
-# 2. 升级 package.json (引入 playwright-extra)
+# 2. package.json
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/base/package.json"
 {
@@ -57,7 +52,7 @@ cat << 'EOF' > "$BASE_DIR/base/package.json"
 EOF
 
 # ----------------------------------------------------
-# 3. entrypoint.sh (保持严格的连接检查逻辑)
+# 3. entrypoint.sh (🔴 核心修复：使用绝对路径)
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/base/entrypoint.sh"
 #!/bin/bash
@@ -77,19 +72,37 @@ check_service() {
     exit 1
 }
 
-echo "🚀 [1/4] 启动 Xvfb..."
+echo "🚀 [1/5] 配置 VNC 密码..."
+# 🔴 修复：使用绝对路径 /app/vnc_pass，避免 ~ 符号展开失败
+PASS_FILE="/app/vnc_pass"
+
+if [ -n "$VNC_PASSWORD" ]; then
+    echo "🔐 正在生成密码文件..."
+    # 确保没有旧文件干扰
+    rm -f "$PASS_FILE"
+    # 写入密码
+    x11vnc -storepasswd "$VNC_PASSWORD" "$PASS_FILE"
+    chmod 600 "$PASS_FILE"
+    AUTH_ARG="-rfbauth $PASS_FILE"
+else
+    echo "⚠️ 未设置密码，启用免密模式"
+    AUTH_ARG="-nopw"
+fi
+
+echo "🚀 [2/5] 启动 Xvfb..."
 Xvfb :99 -screen 0 1280x1024x24 &
 check_service "Xvfb" "xdpyinfo -display :99 >/dev/null 2>&1"
 
-echo "🚀 [2/4] 启动 x11vnc..."
-x11vnc -display :99 -nopw -forever -shared -rfbport 5900 -bg
+echo "🚀 [3/5] 启动 x11vnc..."
+# 使用修复后的绝对路径参数
+x11vnc -display :99 $AUTH_ARG -forever -shared -rfbport 5900 -bg
 check_service "x11vnc" "netstat -tuln | grep -q ':5900 '"
 
-echo "🚀 [3/4] 启动 noVNC..."
+echo "🚀 [4/5] 启动 noVNC..."
 /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 &
 check_service "noVNC" "netstat -tuln | grep -q ':6080 '"
 
-echo "🚀 [4/4] 启动 Stealth 脚本..."
+echo "🚀 [5/5] 启动 Stealth 脚本..."
 if [ -f "inject.js" ]; then
     node inject.js &
 else
@@ -100,21 +113,21 @@ tail -f /dev/null
 EOF
 
 # ----------------------------------------------------
-# 4. 升级 manager.sh (注入隐匿代码模板)
+# 4. manager.sh
 # ----------------------------------------------------
 cat << 'EOF' > "$BASE_DIR/manager.sh"
 #!/bin/bash
 
 BASE_DIR="$HOME/playwright"
 WORKSPACES="$BASE_DIR/workspaces"
-# 修改镜像名以强制更新
-IMAGE_NAME="playwright-stealth-v2"
+IMAGE_NAME="playwright-fix-pass-v4" # 强制更新镜像名
 GREEN='\033[0;32m'
 NC='\033[0m'
+DEFAULT_PASS="password"
 
 build_image() {
     if [[ "$(docker images -q $IMAGE_NAME 2> /dev/null)" == "" ]] || [[ "$1" == "force" ]]; then
-        echo -e "${GREEN}⚙️  正在构建隐匿版镜像 (需下载字体和插件，时间稍长)...${NC}"
+        echo -e "${GREEN}⚙️  正在构建修复版镜像...${NC}"
         cd "$BASE_DIR/base"
         docker build -t $IMAGE_NAME .
     fi
@@ -134,11 +147,12 @@ get_next_port() {
 generate_workspace() {
     local USER_NAME=$1
     local PORT=$2
-    TARGET_DIR="$WORKSPACES/$USER_NAME"
-    
-    if [ -d "$TARGET_DIR" ]; then echo "用户存在"; return; fi
+    local PASS=$3
 
-    echo -e "${GREEN}🔨 创建隐匿用户: $USER_NAME ($PORT)${NC}"
+    TARGET_DIR="$WORKSPACES/$USER_NAME"
+    if [ -d "$TARGET_DIR" ]; then echo "用户已存在"; return; fi
+
+    echo -e "${GREEN}🔨 创建用户: $USER_NAME ($PORT) | 密码: $PASS ${NC}"
     mkdir -p "$TARGET_DIR/user_data"
 
     cat << YML > "$TARGET_DIR/docker-compose.yml"
@@ -152,58 +166,33 @@ services:
     environment:
       - DISPLAY=:99
       - TZ=Asia/Shanghai
+      - VNC_PASSWORD=${PASS}
     shm_size: '2gb'
     volumes:
       - ./inject.js:/app/inject.js
       - ./user_data:/app/user_data
 YML
 
-    # ==========================================
-    # 核心修改：inject.js 引入 Stealth 逻辑
-    # ==========================================
     cat << JS > "$TARGET_DIR/inject.js"
-// 使用 playwright-extra 包装器
 const { chromium } = require('playwright-extra');
 const stealth = require('puppeteer-extra-plugin-stealth')();
-
-// 加载隐匿插件
 chromium.use(stealth);
 
 (async () => {
-  console.log('🕵️ [Stealth Mode] 用户: $USER_NAME 启动中...');
+  console.log('🕵️ [Secure Mode] 用户: $USER_NAME 启动中...');
   const userDataDir = '/app/user_data';
-  
   try {
     const context = await chromium.launchPersistentContext(userDataDir, { 
       headless: false,
       viewport: { width: 1280, height: 1024 },
-      // 关键参数：禁用自动化控制特征
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--no-sandbox',
-        '--disable-setuid-sandbox'
-      ],
-      // 模拟真实 User-Agent (Win10 Chrome)
+      args: ['--disable-blink-features=AutomationControlled','--no-sandbox','--disable-setuid-sandbox'],
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     });
-    
     const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
-    
-    // 注入 webdriver 属性移除 (双重保险)
-    await page.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => undefined,
-        });
-    });
-
-    console.log('🌐 正在访问 Google 检测点...');
+    await page.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); });
     await page.goto('https://www.google.com');
-    
     console.log('✅ Title: ' + await page.title());
-    
-    // 防止进程退出
     setInterval(() => {}, 10000); 
-
   } catch (e) { console.error(e); }
 })();
 JS
@@ -215,11 +204,16 @@ JS
 
 create_default() {
     build_image
-    if [ ! -d "$WORKSPACES/default" ]; then generate_workspace "default" "6080"; fi
+    if [ ! -d "$WORKSPACES/default" ]; then
+        generate_workspace "default" "6080" "$DEFAULT_PASS"
+    fi
 }
 add_new_user() {
     build_image
-    generate_workspace "$1" "$(get_next_port)"
+    local NAME=$1
+    local PASS=$2
+    if [ -z "$PASS" ]; then PASS="$DEFAULT_PASS"; fi
+    generate_workspace "$NAME" "$(get_next_port)" "$PASS"
 }
 delete_user() {
     TARGET_DIR="$WORKSPACES/$1"
@@ -231,7 +225,7 @@ list_users() {
 
 case "$1" in
     init)  create_default ;;
-    add)   add_new_user "$2" ;;
+    add)   add_new_user "$2" "$3" ;;
     del)   delete_user "$2" ;;
     list)  list_users ;;
     build) build_image force ;;
@@ -241,27 +235,27 @@ EOF
 chmod +x "$BASE_DIR/manager.sh"
 
 # ====================================================
-# 5. 执行清理并应用新镜像
+# 5. 清理与重建
 # ====================================================
 
-echo "🧹 正在清理旧容器以应用 Stealth 补丁..."
+echo "🧹 正在清理旧容器以应用修复..."
+# 必须先删掉旧的容器，否则它还是用的旧镜像和旧逻辑
 if [ -d "$BASE_DIR/workspaces/default" ]; then
     cd "$BASE_DIR/workspaces/default" && docker-compose down 2>/dev/null
+    cd "$BASE_DIR"
+    rm -rf "$BASE_DIR/workspaces/default"
 fi
 
-echo "🔄 正在构建隐匿版环境 (这步会下载字体和插件，请耐心等待)..."
+echo "🔄 重新构建并启动..."
 "$BASE_DIR/manager.sh" build force
 "$BASE_DIR/manager.sh" init
 
 IP=$(curl -s ifconfig.me)
 echo ""
 echo "==========================================="
-echo "🕵️  隐匿版 (Stealth) 部署成功！"
+echo "✅ 密码逻辑已修复！"
 echo "==========================================="
-echo "1. 默认账户 (6080) 已应用反爬策略。"
+echo "请再次尝试连接："
 echo "   ➜ http://$IP:6080/vnc.html"
-echo ""
-echo "2. 验证伪装效果："
-echo "   请在 VNC 浏览器中访问 https://bot.sannysoft.com/"
-echo "   你应该能看到 WebDriver 项为 'missing' (绿色)。"
+echo "   🔑 密码: password"
 echo "==========================================="

@@ -39,6 +39,12 @@
       "command": "docker run -d   --name firefox-selenium   --restart=unless-stopped   -p 4444:4444   -p 7900:7900   -e SE_VNC_NO_PASSWORD=1   -e SE_SCREEN_WIDTH=1920   -e SE_SCREEN_HEIGHT=1080   -v ~/firefox-data:/home/seluser   --shm-size=2g   seleniarm/standalone-firefox",
       "favorite": false,
       "added_time": "2026-01-03T13:22:36Z"
+    },
+    {
+      "id": 8,
+      "command": "docker run -d   --name derper   --restart always   -p 127.0.0.1:9443:80   -p 3478:3478/udp   tailscale/derper:latest   /derper -a :80 -http-port 80 -hostname=derp.beundredig.eu.org -stun",
+      "favorite": false,
+      "added_time": "2026-01-08T06:36:47Z"
     }
   ],
   "scripts": [

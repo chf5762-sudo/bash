@@ -9,3 +9,4 @@ install-xfce-xrdp.sh|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/he
 camera-speaker-mic-blind|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/camera_mic_voice_blind
 playwright-chrom-novnc-x11-xvfb-webspclofu|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/Solution%20discuss/Chrom_playwright_manager.sh
 SOcks5 proxy 1080|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/Gost%20SOCKS5%201080-Tailscale
+vps memory manage|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/vps-memory-manage

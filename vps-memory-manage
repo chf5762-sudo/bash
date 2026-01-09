@@ -1,0 +1,169 @@
+#!/bin/bash
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 权限检查
+if [ "$EUID" -ne 0 ]; then 
+  echo -e "${RED}错误：请使用 root 权限运行此脚本（sudo ./vps_fix.sh）。${NC}"
+  exit 1
+fi
+
+# 菜单显示
+show_menu() {
+    clear
+    echo -e "${BLUE}================================================${NC}"
+    echo -e "${GREEN}          甲骨文 VPS 内存管理与优化工具          ${NC}"
+    echo -e "${BLUE}================================================${NC}"
+    echo -e "${YELLOW}1.${NC} 检查内存、Swap 及僵尸进程状态"
+    echo -e "${YELLOW}2.${NC} 一键创建/重置 2GB 虚拟内存 (Swap)"
+    echo -e "${YELLOW}3.${NC} 清理僵尸进程 (自动杀掉制造者的父进程)"
+    echo -e "${YELLOW}4.${NC} 进程内存消耗排榜 (可选择 PID 删除)"
+    echo -e "${YELLOW}5.${NC} 限制 Docker 容器内存 (动态选择容器)"
+    echo -e "${YELLOW}6.${NC} 彻底屏蔽系统服务 (可自定义服务名)"
+    echo -e "${YELLOW}0.${NC} 退出脚本"
+    echo -e "${BLUE}================================================${NC}"
+    echo -n "请输入选项 [0-6]: "
+}
+
+# 1. 检查状态
+check_status() {
+    echo -e "${GREEN}--- 内存使用详情 ---${NC}"
+    free -h
+    echo -e "\n${GREEN}--- 僵尸进程统计 ---${NC}"
+    zombie_count=$(ps -ef | grep 'defunct' | grep -v grep | wc -l)
+    if [ "$zombie_count" -gt 0 ]; then
+        echo -e "${RED}当前发现 $zombie_count 个僵尸进程！${NC}"
+        ps -ef | grep 'defunct' | grep -v grep
+    else
+        echo -e "${GREEN}暂无僵尸进程，系统洁净。${NC}"
+    fi
+}
+
+# 2. 创建 Swap
+make_swap() {
+    echo -e "${YELLOW}正在配置 2GB 虚拟内存...${NC}"
+    if [ -f /swapfile ]; then
+        swapoff /swapfile 2>/dev/null
+        rm -f /swapfile
+    fi
+    fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    if ! grep -q "/swapfile" /etc/fstab; then
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+    echo -e "${GREEN}2GB Swap 已创建并设置为开机自启。${NC}"
+}
+
+# 3. 清理僵尸进程
+kill_zombies() {
+    parents=$(ps -ef | grep 'defunct' | grep -v grep | awk '{print $3}' | sort -u)
+    if [ -n "$parents" ]; then
+        for ppid in $parents; do
+            if [ "$ppid" -ne 1 ]; then
+                proc_name=$(ps -p $ppid -o comm=)
+                echo -e "${RED}发现僵尸制造者: $proc_name (PID: $ppid)，正在清理...${NC}"
+                kill -9 $ppid
+            fi
+        done
+        echo -e "${GREEN}清理完成。${NC}"
+    else
+        echo -e "${GREEN}未发现需要清理的僵尸进程。${NC}"
+    fi
+}
+
+# 4. 进程内存排榜与删除
+manage_proc() {
+    echo -e "${YELLOW}内存占用最高的前 10 个进程：${NC}"
+    # 获取 PID, %MEM, COMMAND
+    mapfile -t processes < <(ps axo pid,pmem,comm --sort=-pmem | head -n 11 | tail -n 10)
+    
+    echo -e "序号\tPID\t内存%\t进程命令"
+    for i in "${!processes[@]}"; do
+        echo -e "$((i+1))\t${processes[$i]}"
+    done
+
+    echo -n "请输入要终止的进程序号 (多个用空格，回车取消): "
+    read choices
+    for choice in $choices; do
+        pid=$(echo "${processes[$((choice-1))]}" | awk '{print $1}')
+        if [ -n "$pid" ]; then
+            kill -9 $pid
+            echo -e "${RED}PID $pid 已强行终止。${NC}"
+        fi
+    done
+}
+
+# 5. 动态限制 Docker 内存
+limit_docker() {
+    echo -e "${YELLOW}--- 正在获取运行中的容器 ---${NC}"
+    mapfile -t containers < <(docker ps --format "{{.Names}}")
+    
+    if [ ${#containers[@]} -eq 0 ]; then
+        echo -e "${RED}未发现运行中的 Docker 容器。${NC}"
+        return
+    fi
+
+    echo -e "序号\t容器名称"
+    for i in "${!containers[@]}"; do
+        echo -e "$((i+1))\t${containers[$i]}"
+    done
+
+    echo -n "请输入要限制内存(200M)的容器序号: "
+    read choice
+    container_name=${containers[$((choice-1))]}
+
+    if [ -n "$container_name" ]; then
+        echo -e "${YELLOW}正在限制 $container_name 并重启...${NC}"
+        docker update --memory 200m --memory-swap 400m "$container_name"
+        docker restart "$container_name"
+        echo -e "${GREEN}成功：$container_name 限制为 200M 物理内存。${NC}"
+    else
+        echo -e "${RED}输入无效。${NC}"
+    fi
+}
+
+# 6. 彻底屏蔽系统服务
+remove_bad_services() {
+    echo -e "${YELLOW}提示：屏蔽服务（Mask）将导致其完全无法启动。${NC}"
+    echo -n "请输入要屏蔽的服务名 (例如: gost clewdr apport，空格分隔): "
+    read input_services
+    
+    if [ -z "$input_services" ]; then
+        echo -e "${RED}未输入任何服务名，取消操作。${NC}"
+        return
+    fi
+
+    for s in $input_services; do
+        echo -e "${YELLOW}处理中: $s ...${NC}"
+        systemctl stop "$s" 2>/dev/null
+        systemctl disable "$s" 2>/dev/null
+        systemctl mask "$s" 2>/dev/null
+        echo -e "${GREEN}服务 $s 已被彻底锁死。${NC}"
+    done
+    systemctl daemon-reload
+}
+
+# 主循环
+while true; do
+    show_menu
+    read -r opt
+    case $opt in
+        1) check_status ;;
+        2) make_swap ;;
+        3) kill_zombies ;;
+        4) manage_proc ;;
+        5) limit_docker ;;
+        6) remove_bad_services ;;
+        0) echo "退出中..."; exit 0 ;;
+        *) echo -e "${RED}选择错误，请重试。${NC}" ;;
+    esac
+    echo -e "\n${BLUE}操作完成。按任意键返回菜单...${NC}"
+    read -n 1
+done

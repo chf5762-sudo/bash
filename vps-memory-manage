@@ -17,14 +17,14 @@ fi
 show_menu() {
     clear
     echo -e "${BLUE}================================================${NC}"
-    echo -e "${GREEN}          甲骨文 VPS 内存管理与优化工具          ${NC}"
+    echo -e "${GREEN}       甲骨文 VPS 资源管理与服务优化工具          ${NC}"
     echo -e "${BLUE}================================================${NC}"
     echo -e "${YELLOW}1.${NC} 检查内存、Swap 及僵尸进程状态"
     echo -e "${YELLOW}2.${NC} 一键创建/重置 2GB 虚拟内存 (Swap)"
     echo -e "${YELLOW}3.${NC} 清理僵尸进程 (自动杀掉制造者的父进程)"
-    echo -e "${YELLOW}4.${NC} 进程内存消耗排榜 (可选择 PID 删除)"
+    echo -e "${YELLOW}4.${NC} 资源消耗排榜 (前20/支持多选/注销服务)"
     echo -e "${YELLOW}5.${NC} 限制 Docker 容器内存 (动态选择容器)"
-    echo -e "${YELLOW}6.${NC} 彻底屏蔽系统服务 (可自定义服务名)"
+    echo -e "${YELLOW}6.${NC} 彻底屏蔽系统服务 (手动输入名)"
     echo -e "${YELLOW}0.${NC} 退出脚本"
     echo -e "${BLUE}================================================${NC}"
     echo -n "请输入选项 [0-6]: "
@@ -78,24 +78,78 @@ kill_zombies() {
     fi
 }
 
-# 4. 进程内存排榜与删除
+# 4. 资源消耗排榜与服务注销 (升级版)
 manage_proc() {
-    echo -e "${YELLOW}内存占用最高的前 10 个进程：${NC}"
-    # 获取 PID, %MEM, COMMAND
-    mapfile -t processes < <(ps axo pid,pmem,comm --sort=-pmem | head -n 11 | tail -n 10)
-    
-    echo -e "序号\tPID\t内存%\t进程命令"
-    for i in "${!processes[@]}"; do
-        echo -e "$((i+1))\t${processes[$i]}"
+    echo -e "${YELLOW}CPU 占用最高的前 20 个进程及服务关联：${NC}"
+    echo -e "----------------------------------------------------------------------"
+    printf "%-6s %-8s %-8s %-15s %-20s\n" "序号" "PID" "CPU%" "命令" "关联服务"
+    echo -e "----------------------------------------------------------------------"
+
+    # 获取数据并排除脚本及系统工具进程
+    mapfile -t proc_list < <(ps -eo pid,pcpu,comm --sort=-pcpu | grep -vE "PID|ps|grep|vps_fix" | head -n 20)
+
+    declare -A svc_map
+    declare -A pid_map
+    declare -A name_map
+
+    local count=1
+    for line in "${proc_list[@]}"; do
+        pid=$(echo $line | awk '{print $1}')
+        cpu=$(echo $line | awk '{print $2}')
+        comm=$(echo $line | awk '{print $3}')
+        
+        # 自动识别 Service
+        unit=$(systemctl status $pid 2>/dev/null | grep -oP '(?<=● )[^ ]+' | head -n 1)
+        if [ -z "$unit" ]; then unit=$(systemctl show -p Unit --value $pid 2>/dev/null); fi
+        
+        if [[ -z "$unit" || "$unit" == " " || "$unit" == "0" ]]; then
+            display_svc="[非服务]"
+            val_svc=""
+        else
+            display_svc="$unit"
+            val_svc="$unit"
+        fi
+
+        printf "%-6s %-8s %-8s %-15s %-20s\n" "[$count]" "$pid" "$cpu" "$comm" "$display_svc"
+        
+        svc_map[$count]=$val_svc
+        pid_map[$count]=$pid
+        name_map[$count]=$comm
+        ((count++))
     done
 
-    echo -n "请输入要终止的进程序号 (多个用空格，回车取消): "
+    echo -e "----------------------------------------------------------------------"
+    echo -n "请输入要处理的序号 (多个用空格，例如: 1 3 5): "
     read choices
+    
+    if [ -z "$choices" ]; then return; fi
+
     for choice in $choices; do
-        pid=$(echo "${processes[$((choice-1))]}" | awk '{print $1}')
-        if [ -n "$pid" ]; then
-            kill -9 $pid
-            echo -e "${RED}PID $pid 已强行终止。${NC}"
+        t_pid=${pid_map[$choice]}
+        t_svc=${svc_map[$choice]}
+        t_name=${name_map[$choice]}
+
+        if [ -z "$t_pid" ]; then continue; fi
+
+        echo -e "\n${BLUE}[处理 #$choice]${NC} 正在清理: $t_name ..."
+        
+        if [ -n "$t_svc" ]; then
+            echo -e "  - 检测到服务: ${YELLOW}$t_svc${NC}，执行注销流程..."
+            systemctl stop "$t_svc" 2>/dev/null
+            systemctl disable "$t_svc" 2>/dev/null
+            
+            # 查找并删除服务文件
+            svc_file=$(systemctl show -p FragmentPath "$t_svc" | cut -d'=' -f2)
+            if [ -f "$svc_file" ]; then
+                rm -f "$svc_file"
+                echo -e "  - 已移除服务文件: $svc_file"
+                systemctl daemon-reload
+            fi
+            pkill -9 -f "$t_name" 2>/dev/null
+            echo -e "  ${GREEN}[成功] 服务已注销并停止。${NC}"
+        else
+            kill -9 "$t_pid" 2>/dev/null
+            echo -e "  ${GREEN}[成功] 进程 $t_pid 已强制结束。${NC}"
         fi
     done
 }

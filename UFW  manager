@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 权限检查
+if [ "$EUID" -ne 0 ]; then 
+  echo -e "${RED}错误：请使用 root 权限运行此脚本。${NC}"
+  exit 1
+fi
+
+# 检查并安装 UFW
+check_install_ufw() {
+    if ! command -v ufw &> /dev/null; then
+        echo -e "${YELLOW}未检测到 UFW，正在为您安装...${NC}"
+        apt-get update && apt-get install -y ufw
+        echo -e "${GREEN}安装完成。${NC}"
+    fi
+}
+
+# 显示状态
+show_status() {
+    echo -e "\n${BLUE}===== 当前防火墙规则 (UFW) =====${NC}"
+    ufw status numbered
+    echo -e "\n${BLUE}===== 当前系统监听端口 (ss) =====${NC}"
+    # 列出所有监听端口，包含进程名
+    ss -tunlp | grep 'LISTEN' | awk '{print $1, $5, $7}' | sed 's/.*://' | column -t
+}
+
+# 主菜单
+clear
+check_install_ufw
+
+echo -e "${BLUE}================================================${NC}"
+echo -e "${GREEN}          UFW 防火墙智能管理工具               ${NC}"
+echo -e "${BLUE}================================================${NC}"
+echo -e "${YELLOW}1.${NC} 开启防火墙 (自动允许 22/SSH)"
+echo -e "${YELLOW}2.${NC} 关闭防火墙"
+echo -e "${YELLOW}3.${NC} 智能放行：自动扫描并开启当前监听端口"
+echo -e "${YELLOW}4.${NC} 手动放行：允许 TCP 端口 (支持批量)"
+echo -e "${YELLOW}5.${NC} 手动放行：允许 UDP 端口 (支持批量)"
+echo -e "${YELLOW}6.${NC} 查看端口状态及规则"
+echo -e "${YELLOW}0.${NC} 退出"
+echo -e "${BLUE}================================================${NC}"
+echo -n "请选择操作 [0-6]: "
+read opt
+
+case $opt in
+    1)
+        # 核心保护：防止开启后无法连接 SSH
+        ufw allow 22/tcp
+        echo "y" | ufw enable
+        echo -e "${GREEN}防火墙已开启，SSH (22) 已默认允许。${NC}"
+        ;;
+    2)
+        ufw disable
+        echo -e "${RED}防火墙已关闭。${NC}"
+        ;;
+    3)
+        echo -e "${YELLOW}正在扫描系统实时监听端口...${NC}"
+        # 原理：通过 ss 命令获取协议和端口号
+        mapfile -t active_ports < <(ss -tunlp | grep 'LISTEN' | awk '{print $1,$5}' | sed 's/.*://' | sort -u)
+        
+        if [ ${#active_ports[@]} -eq 0 ]; then
+            echo -e "${RED}未发现活跃端口。${NC}"
+        else
+            for line in "${active_ports[@]}"; do
+                proto=$(echo $line | awk '{print $1}') # tcp 或 udp
+                port=$(echo $line | awk '{print $2}')
+                if [[ "$port" =~ ^[0-9]+$ ]]; then
+                    ufw allow "$port/$proto" > /dev/null
+                    echo -e "${GREEN}[已放行] 端口: $port / 协议: $proto${NC}"
+                fi
+            done
+            echo -e "${BLUE}所有运行中的服务端口已同步。${NC}"
+        fi
+        ;;
+    4|5)
+        protocol="tcp"
+        [ "$opt" == "5" ] && protocol="udp"
+        echo -e "${YELLOW}请输入要放行的 $protocol 端口号${NC}"
+        echo -e "(多个用空格隔开，例如: 80 443 8443): "
+        read ports
+        for p in $ports; do
+            if [[ "$p" =~ ^[0-9:]+$ ]]; then
+                ufw allow "$p/$protocol"
+                echo -e "${GREEN}[完成] $p/$protocol 已允许。${NC}"
+            else
+                echo -e "${RED}[跳过] $p 不是有效端口。${NC}"
+            fi
+        done
+        ;;
+    6)
+        show_status
+        ;;
+    0)
+        exit 0
+        ;;
+    *)
+        echo -e "${RED}选择错误。${NC}"
+        ;;
+esac
+
+echo -e "\n${BLUE}操作结束。${NC}"

@@ -1,0 +1,97 @@
+#!/bin/bash
+
+# 检查 root 权限
+if [ "$EUID" -ne 0 ]; then 
+  echo "请使用 sudo 运行此脚本"
+  exit
+fi
+
+echo "--------------------------------------------------------------------------------------"
+echo "  CPU 消耗前 20 进程及系统服务列表 (支持多选)"
+echo "--------------------------------------------------------------------------------------"
+printf "%-6s %-8s %-8s %-20s %-25s\n" "序号" "PID" "CPU%" "命令" "关联系统服务"
+echo "--------------------------------------------------------------------------------------"
+
+# 1. 获取前 20 个高 CPU 进程
+mapfile -t processes < <(ps -eo pid,pcpu,comm --sort=-pcpu | grep -vE "PID|ps|grep|multi_manage" | head -n 20)
+
+i=1
+declare -A service_map
+declare -A pid_map
+declare -A name_map
+
+for line in "${processes[@]}"; do
+    pid=$(echo $line | awk '{print $1}')
+    cpu=$(echo $line | awk '{print $2}')
+    comm=$(echo $line | awk '{print $3}')
+    
+    # 查找关联服务
+    unit=$(systemctl status $pid 2>/dev/null | grep -oP '(?<=● )[^ ]+' | head -n 1)
+    if [ -z "$unit" ]; then
+        unit=$(systemctl show -p Unit --value $pid 2>/dev/null)
+    fi
+    
+    if [[ -z "$unit" || "$unit" == " " || "$unit" == "0" ]]; then
+        unit_display="[普通进程]"
+        unit_val=""
+    else
+        unit_display="$unit"
+        unit_val="$unit"
+    fi
+    
+    printf "%-6s %-8s %-8s %-20s %-25s\n" "[$i]" "$pid" "$cpu" "$comm" "$unit_display"
+    
+    service_map[$i]=$unit_val
+    pid_map[$i]=$pid
+    name_map[$i]=$comm
+    ((i++))
+done
+
+echo "--------------------------------------------------------------------------------------"
+echo "请输入要处理的序号，用空格隔开 (例如: 1 3 7)，或输入 q 退出"
+read -p "选择: " -a choices
+
+if [[ "${choices[0]}" == "q" ]]; then exit; fi
+
+echo "--------------------------------------------------------------------------------------"
+read -p "确认要对选中的 ${#choices[@]} 个目标执行清理吗? (y/n): " confirm
+if [[ "$confirm" != "y" ]]; then exit; fi
+
+for choice in "${choices[@]}"; do
+    target_service=${service_map[$choice]}
+    target_pid=${pid_map[$choice]}
+    target_name=${name_map[$choice]}
+
+    if [ -z "$target_pid" ]; then
+        echo "序号 [$choice] 无效，跳过。"
+        continue
+    fi
+
+    echo -e "\n[处理序列 $choice] >>> 目标: $target_name (PID: $target_pid)"
+
+    if [ -n "$target_service" ]; then
+        # --- 系统服务处理逻辑 ---
+        echo "   - 检测到系统服务: $target_service"
+        echo "   - 正在停止并禁用服务..."
+        systemctl stop "$target_service" 2>/dev/null
+        systemctl disable "$target_service" 2>/dev/null
+        
+        service_file=$(systemctl show -p FragmentPath "$target_service" | cut -d'=' -f2)
+        if [ -f "$service_file" ]; then
+            echo "   - 正在删除服务文件: $service_file"
+            rm "$service_file"
+            systemctl daemon-reload
+        fi
+        # 强制结束关联进程
+        pkill -9 -f "$target_name" 2>/dev/null
+        echo "   - 服务注销完成。"
+    else
+        # --- 普通进程处理逻辑 ---
+        echo "   - 该进程无关联服务，正在强制杀死 (kill -9)..."
+        kill -9 "$target_pid" 2>/dev/null
+        echo "   - 进程已杀死。"
+    fi
+done
+
+echo -e "\n--------------------------------------------------------------------------------------"
+echo "所有选定操作执行完毕。"

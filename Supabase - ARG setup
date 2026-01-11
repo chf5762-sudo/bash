@@ -1,4 +1,4 @@
-喜你已经打通了 Supabase + Gemini 的语义搜索全链路！为了方便你下次在其他项目“一键复现”，我将整个流程归纳为 “三步走” 标准操作手册。
+
 
 🚀 Supabase + Gemini 语义搜索部署手册
 准备工作
@@ -117,9 +117,15 @@ order by embedding <=> 你的_查询向量
 limit 5;
 💡 设置要点记录（防坑指南）
 UUID 报错: 手动插入测试数据时，id 列请保持 NULL，让系统自动生成，不要填数字。
-
 401 报错: 如果日志显示 401，请检查 Edge Function 的 JWT 鉴权是否已关闭。
-
 日志空白: 如果插入数据但没有日志，请检查 extensions.pg_net 是否已安装，以及 SQL 里的 url 地址是否填对。
-
 维度匹配: Gemini 004 的输出是 768 位，如果数据库表定义成 1536 位（OpenAI 标准）会报错。
+
+
+💡 下一步：全链路归纳（直接 Copy 存档）
+既然你已经完成了从数据库、函数、Webhook 到 RLS 的所有配置，这里是一份最终部署清单，你可以保存下来，以后任何项目只要按这个顺序做，3分钟就能跑通：
+以下是必须设置项：
+SQL: 开启 vector 和 pg_net 扩展，创建 universal_search_index 表。
+Storage: 创建 files_library 桶，设为 Public，添加 RLS SELECT 策略。
+Functions: 部署 swift-endpoint 代码（多模态版），关闭 JWT。
+Webhooks: 开启 Webhooks 按钮，创建监听 storage.objects 的 HTTP Request 任务，Timeout 设为 30s。

@@ -1,3 +1,215 @@
+方案总结1：表过于严格，Null 空会报错。要宽进严出。 注意环境变量key的设置，必须要在环境变量设置key,直接硬编码不能解决问题。
+不需要转换为Base64 ,gemini3 可以直接解析照片；
+
+你是希望构建一个更完整的业务体系，而不仅仅是一个孤立的 AI 索引表。基于你目前的 Gemini 1.5 Flash 和 vps2.chf5762 代理环境，我们需要建立一套能够支撑“文件、用户、业务逻辑和 AI 索引”互相关联的四表架构。
+
+以下是为您定制的完整部署方案：
+
+一、 四表联动架构设计
+为了确保数据库兼容性强且逻辑清晰，我们将构建以下四张表：
+
+files_library: 核心业务表，记录你 API 上传的文件元数据。
+
+users_profile: 用户表，关联文件的所有者。
+
+universal_search_index: AI 语义仓库，存放 Gemini 生成的描述和向量。
+
+process_logs: 自动化监控表，记录 Webhook 处理 AI 的成功或失败状态。
+
+1. SQL 部署脚本 (SQL Editor 运行)
+SQL
+
+-- 开启向量与网络扩展
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS "pg_net";
+
+-- 【表1】用户信息表
+CREATE TABLE IF NOT EXISTS public.users_profile (
+    id uuid PRIMARY KEY DEFAULT auth.uid(),
+    username TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 【表2】文件业务表 (你的 API 调用的主表)
+CREATE TABLE IF NOT EXISTS public.files_library (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    file_name TEXT NOT NULL,
+    storage_path TEXT NOT NULL,
+    user_id uuid REFERENCES public.users_profile(id),
+    status TEXT DEFAULT 'pending', -- pending, processed, failed
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 【表3】AI 语义索引表 (核心搜索表)
+CREATE TABLE IF NOT EXISTS public.universal_search_index (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    content TEXT,                       -- Gemini 3 生成的描述
+    embedding vector(768),              -- Gemini 004 向量维度
+    file_id uuid REFERENCES public.files_library(id) ON DELETE CASCADE,
+    file_name TEXT,
+    source_table TEXT DEFAULT 'files_library',
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 【表4】处理日志表 (排错专用)
+CREATE TABLE IF NOT EXISTS public.process_logs (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    target_id uuid,
+    event_type TEXT,
+    status_code INT,
+    error_message TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+二、 自动化逻辑部署 (Edge Function)
+1. 环境变量 (Secrets)
+请确保在 swift-endpoint 的设置中填入：
+
+GOOGLE_API_KEY: 你的密钥。
+
+PROXY_URL: https://vps2.chf5762.me/proxy。
+
+GOOGLE_EMBED_URL: .../text-embedding-004:embedContent。
+
+2. 测试步骤 (无需上传图片的快速验证)
+你可以直接在 Edge Function 的测试弹窗 (你之前 post 测试的地方) 输入以下 JSON 来模拟 Webhook 信号：
+
+JSON
+
+{
+  "record": {
+    "id": "把你在 files_library 里的某个 UUID 填在这里",
+    "name": "3.png",
+    "bucket_id": "files_library"
+  },
+  "table": "objects",
+  "type": "INSERT"
+}
+三、 Webhook 重点配置 (防错指南)
+在 Webhook 配置界面，针对这四张表的联动，有几个死规定：
+
+监听表: 依然选择 storage.objects（因为文件落盘是整个链条的起点）。
+
+超时 (Timeout): 必须设为 30000ms。因为逻辑现在变复杂了：函数需要解析图片 -> 生成向量 -> 同时更新 universal_search_index 表和修改 files_library 表的状态。
+
+HTTP Headers:
+
+Authorization: Bearer 你的_SERVICE_ROLE_KEY (别忘了 Bearer 后面的空格)。
+
+Content-Type: application/json
+
+四、 总结：避坑与运行流程
+流程: API 上传文件 -> Storage 触发 Webhook -> swift-endpoint 函数启动 -> 调用 vps2 代理传图给 Gemini -> 函数将描述存入 universal_search_index -> 函数将 files_library 状态改为 processed。
+
+错误点:
+
+如果你发现 universal_search_index 有数据但 files_library 状态没变，说明函数的 PATCH 请求权限没给够（必须用 service_role）。
+
+如果 3.png 成功但换个大图失败，检查 Webhook 超时是否真的改成了 30 秒。
+
+
+
+方案总结2：
+Supabase + Gemini 3 全自动视觉搜索部署手册 (生产环境版)
+一、 数据库基建 (SQL Editor)
+首先，通过 SQL 消除之前遇到的 Not-Null 约束冲突，确保数据库能兼容各种来源的信号。
+
+<SQL>
+-- 1. 开启必要扩展
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS "pg_net";
+-- 2. 创建高兼容性索引表
+CREATE TABLE IF NOT EXISTS public.universal_search_index (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    content text,                       -- 存放 Gemini 1.5 Flash 生成的描述
+    embedding vector(768),              -- 对应 text-embedding-004 维度
+    file_name text,                     -- 来源文件名 (如 3.png)
+    file_url text,                      -- 图片公开访问地址
+    source_table text DEFAULT 'storage',
+    source_id text DEFAULT NULL,        -- 【核心】设为 NULL，允许 API 直接写入
+    metadata jsonb DEFAULT '{}'::jsonb, -- 预留位
+    created_at timestamptz DEFAULT now()
+);
+-- 3. [可选] 为向量搜索提速 (HNSW 索引)
+CREATE INDEX ON universal_search_index USING hnsw (embedding vector_cosine_ops);
+二、 逻辑大脑配置 (Edge Functions)
+1. 环境变量 (Secrets) —— 必须在后台手动添加
+进入 Edge Functions -> swift-endpoint -> Settings -> Secrets：
+
+GOOGLE_API_KEY: 你的 Google AI Studio Key
+GOOGLE_EMBED_URL: https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent
+PROXY_URL: https://vps2.chf5762.me/proxy (你的专用代理)
+PROXY_KEY: 你的代理授权码
+2. 核心代码逻辑简述
+确保你的代码能够接收 body.record。当 Webhook 触发时，它会发送如下结构的 JSON，你的代码需能从中提取 name：
+
+<JSON>
+{ 
+  "record": { 
+    "name": "3.png", 
+    "bucket_id": "files_library" 
+  } 
+}
+三、 全自动触发配置 (Webhook)
+这一步是连接“存储”与“AI”的桥梁。
+
+Table: storage.objects (存储系统表)
+Events: INSERT
+Timeout: 30000ms (必须调大，因为通过 vps2 代理调用 Gemini 视觉模型较慢)
+HTTP Headers:
+Authorization: Bearer 你的_SERVICE_ROLE_KEY (⚠️注意 Bearer 后面有一个空格)
+Content-Type: application/json
+四、 多维度测试步骤 (关键)
+1. Webhook 模拟测试 (最推荐，验证逻辑)
+不需要上传图片，直接在 Edge Function 的 Test 面板中操作：
+
+Method: POST
+Body:
+<JSON>
+{
+  "record": {
+    "name": "3.png",
+    "bucket_id": "files_library"
+  },
+  "table": "objects",
+  "type": "INSERT"
+}
+预期结果: 返回 200 OK 且日志显示 【4. AI完成】。
+2. SQL 模拟测试 (验证数据库回写)
+如果你想绕过 Webhook，直接测试数据库存储逻辑，可以手动插入一条记录触发（如果绑定了触发器）：
+
+<SQL>
+INSERT INTO public.universal_search_index (content, file_name, source_table)
+VALUES ('测试手动输入内容', 'manual_test.png', 'manual');
+验证: 检查该行记录的 embedding 是否在几秒后自动从 NULL 变成了向量数组。
+
+3. 全链路黑盒测试 (最终验证)
+打开 Storage，在 files_library 文件夹下拖入一张包含文字的图（如 4.png）。
+
+看日志: 进入 Edge Functions -> swift-endpoint -> Logs，确认是否有新的请求进来。
+看数据:
+<SQL>
+SELECT * FROM universal_search_index ORDER BY created_at DESC LIMIT 1;
+五、 重点排坑清单 (存档备用)
+401 报错: Webhook 的 Header 里的 Bearer 漏了空格，或者用成了 anon key（必须用 service_role）。
+500 报错: source_id 违反非空约束。解决方法：执行上文第一步的 ALTER COLUMN ... DROP NOT NULL。
+超时: 图像太大或代理节点 vps2 延迟高。解决方法：将 Webhook 超时增加到 10s。(最多也就10S)
+维度不匹配: 数据库设为 1536 维但使用了 Gemini 004。解决方法：确保 SQL 是 vector(768)。
+
+
+
+
+
+
+
+
+
+
+
+
+
+方案总结3：
+当前表过于严格，Null 空会报错。要宽进严出。
 
 
 🚀 Supabase + Gemini 语义搜索部署手册

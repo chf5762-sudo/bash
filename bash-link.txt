@@ -10,3 +10,4 @@ camera-speaker-mic-blind|https://raw.githubusercontent.com/chf5762-sudo/bash/ref
 VPS  CPU manager|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/vps-cpu-manager
 VPS  mmemory manager|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/vps-memory-manage
 UFW  Manager|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/UFW%20%20manager
+EasyTier|https://raw.githubusercontent.com/chf5762-sudo/bash/refs/heads/main/EasyTier

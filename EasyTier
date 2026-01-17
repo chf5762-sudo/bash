@@ -12,7 +12,7 @@ mkdir -p /etc/easytier /usr/bin
 cat <<EOT > /etc/easytier/config.toml
 instance_name = "AX3600-Main"
 instance_id = "2ccad37f-51e3-4a99-807c-6af30bb6f9dc"
-dhcp = true
+ipv4 = "10.10.10.1"
 listeners = ["tcp://0.0.0.0:11010","udp://0.0.0.0:11010","wg://0.0.0.0:11011"]
 [network_identity]
 network_name = "ax3600-easytier-study"
@@ -53,7 +53,7 @@ cat <<EOT > /etc/easytier/custom_fw.nft
 table inet fw4 {
     chain srcnat_easytier {
         type nat hook postrouting priority srcnat; policy accept;
-        ip saddr 10.126.126.0/24 counter masquerade comment "Force_EasyTier_NAT"
+        ip saddr 10.10.10.0/24 counter masquerade comment "Force_EasyTier_NAT"
     }
     chain forward_easytier {
         type filter hook forward priority filter; policy accept;

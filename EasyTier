@@ -1,8 +1,14 @@
-# 1. 先执行你的全自动固化逻辑
+# 1. 创建整合后的全自动部署脚本
 cat << 'EOF' > /etc/easytier/setup_all_in_one.sh
 #!/bin/sh
-echo "=== 正在执行全自动固化部署 ==="
+echo "==============================================="
+echo "   EasyTier AX3600 终极固化部署 (含 Exit Node 修复)"
+echo "==============================================="
+
+# 创建必要目录
 mkdir -p /etc/easytier /usr/bin
+
+# --- A. 生成配置文件 ---
 cat <<EOT > /etc/easytier/config.toml
 instance_name = "AX3600-Main"
 instance_id = "2ccad37f-51e3-4a99-807c-6af30bb6f9dc"
@@ -18,6 +24,8 @@ dev_name = "et0"
 enable_exit_node = true
 proxy_networks = "192.168.31.0/24"
 EOT
+
+# --- B. 注册系统服务 (init.d) ---
 cat <<EOT > /etc/init.d/easytier
 #!/bin/sh /etc/rc.common
 START=99
@@ -33,18 +41,55 @@ start_service() {
 stop_service() { killall easytier-core; }
 EOT
 chmod +x /etc/init.d/easytier
-uci del_list firewall.@zone[0].device='et0' 2>/dev/null
-uci add_list firewall.@zone[0].device='et0'
-uci set firewall.@zone[0].masq='1'
-uci set firewall.@zone[0].forward='ACCEPT'
+
+# --- C. 强制开启内核转发 ---
+sysctl -w net.ipv4.ip_forward=1
+sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# --- D. 核心修复：防火墙永久 NAT 转发与 Include 挂载 ---
+# 创建 nftables 规则文件
+cat <<EOT > /etc/easytier/custom_fw.nft
+table inet fw4 {
+    chain srcnat_easytier {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 10.126.126.0/24 counter masquerade comment "Force_EasyTier_NAT"
+    }
+    chain forward_easytier {
+        type filter hook forward priority filter; policy accept;
+        iifname "et0" accept comment "Accept_EasyTier_Inbound"
+        oifname "et0" accept comment "Accept_EasyTier_Outbound"
+    }
+}
+EOT
+
+# 创建应用脚本供防火墙调用
+cat <<EOT > /etc/easytier/apply_nft.sh
+#!/bin/sh
+nft -f /etc/easytier/custom_fw.nft
+EOT
+chmod +x /etc/easytier/apply_nft.sh
+
+# 将脚本挂载到系统防火墙 (重启不丢失)
+uci del firewall.easytier_fix 2>/dev/null
+uci set firewall.easytier_fix=include
+uci set firewall.easytier_fix.type='script'
+uci set firewall.easytier_fix.path='/etc/easytier/apply_nft.sh'
 uci commit firewall
+
+# --- E. 激活服务 ---
 /etc/init.d/firewall restart
+/etc/easytier/apply_nft.sh
 killall -9 easytier-core 2>/dev/null
 /etc/init.d/easytier enable
 /etc/init.d/easytier restart
+
+echo "-----------------------------------------------"
+echo -e "\033[32m[OK] 部署完成！Exit Node NAT 规则已强制注入。\033[0m"
+echo "-----------------------------------------------"
 EOF
 
-# 2. 生成管理菜单脚本并注册为快捷命令 'et'
+# 2. 创建快捷管理菜单 'et'
 cat << 'EOF' > /usr/bin/et
 #!/bin/sh
 G='\033[0;32m'; R='\033[0;31m'; Y='\033[0;33m'; NC='\033[0m'
@@ -57,7 +102,7 @@ while true; do
     echo " 3) [路由] 查看虚拟路由        6) [重启] 重启服务"
     echo "-----------------------------------------------"
     echo " 7) [配置] 编辑 config.toml    8) [日志] 实时日志"
-    echo " 9) [重装] 重新执行固化脚本    q) [退出] 离开"
+    echo " 9) [重装] 执行固化/NAT修复    q) [退出] 离开"
     echo "-----------------------------------------------"
     echo -n " 请选择 [1-9/q]: "
     read choice
@@ -68,18 +113,18 @@ while true; do
            read -p "回车继续..." t ;;
         2) easytier-cli peer; read -p "回车继续..." t ;;
         3) easytier-cli route; read -p "回车继续..." t ;;
-        4) /etc/init.d/easytier start; sleep 2 ;;
-        5) /etc/init.d/easytier stop; killall -9 easytier-core 2>/dev/null; sleep 2 ;;
-        6) /etc/init.d/easytier restart; sleep 2 ;;
+        4) /etc/init.d/easytier start; sleep 1 ;;
+        5) /etc/init.d/easytier stop; killall -9 easytier-core 2>/dev/null; sleep 1 ;;
+        6) /etc/init.d/easytier restart; sleep 1 ;;
         7) vi /etc/easytier/config.toml ;;
         8) echo -e "${Y}Ctrl+C 退出${NC}"; logread -f | grep easytier ;;
-        9) sh /etc/easytier/setup_all_in_one.sh; read -p "固化完成，回车继续..." t ;;
+        9) sh /etc/easytier/setup_all_in_one.sh; read -p "固化与修复完成，回车继续..." t ;;
         q) exit 0 ;;
     esac
 done
 EOF
 
-# 3. 授权并立刻执行固化
+# 3. 授权并立刻执行
 chmod +x /etc/easytier/setup_all_in_one.sh
 chmod +x /usr/bin/et
 sh /etc/easytier/setup_all_in_one.sh

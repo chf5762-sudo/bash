@@ -1,83 +1,109 @@
-# 1. 创建整合后的全自动部署脚本
+# ====================================================================================
+# 【EasyTier 避坑指南：核心错误原因与解决办法】
+# ====================================================================================
+
+# 1. 启动优先级
+# 原因：手动修改 /etc/easytier/config.toml 但 init.d 未指定加载路径，改了白改。
+# 解决：放弃配置文件，直接在 init.d 的命令中硬编码所有启动参数，确保 100% 加载。
+
+# 2. 出口宣告失效
+# 原因：只开启了 --enable-exit-node 但没有显式定义代理范围，导致 peer 无法识别出口。
+# 解决：必须强制添加 --proxy-networks 0.0.0.0/0 宣告全量代理。
+
+# 3. TOML 格式陷阱
+# 原因：配置文件中 proxy_networks 必须是数组格式 ["0.0.0.0/0"]，写错格式会被直接忽略。
+# 解决：改用命令行参数 --proxy-networks，避免因为标点、缩进导致的配置失效。
+
+# 4. 流量转发拦截
+# 原因：OpenWrt 23.05 (nftables) 默认禁止转发非局域网流量，且不会对虚拟网卡自动 NAT。
+# 解决：脚本必须开启 net.ipv4.ip_forward=1 并强制注入 nftables 的 masquerade 伪装规则。
+
+# 5. 进程僵尸冲突
+# 原因：重启服务时旧进程未彻底杀死，导致网卡 (et0) 或虚拟 IP 被占用，新参数无法生效。
+# 解决：重启前执行 killall -9 easytier-core，彻底清理旧环境。
+
+# 6. Windows 端断网
+# 原因：设为出口后流量回流，若 DNS 请求无法返回则会导致能 Ping 通但打不开网页。
+# 解决：手动设置 Windows 虚拟网卡 DNS 为 223.5.5.5，绕过复杂的 DNS 转发配置。
+# ====================================================================================
+
+
+
+
 cat << 'EOF' > /etc/easytier/setup_all_in_one.sh
 #!/bin/sh
 echo "==============================================="
-echo "   EasyTier AX3600 终极固化部署 (含 Exit Node 修复)"
+echo "   EasyTier AX3600 终极固化部署 (参数硬核注入版)"
 echo "==============================================="
 
-# 创建必要目录
+# 1. 创建必要目录
 mkdir -p /etc/easytier /usr/bin
 
-# --- A. 生成配置文件 ---
-cat <<EOT > /etc/easytier/config.toml
-instance_name = "AX3600-Main"
-instance_id = "2ccad37f-51e3-4a99-807c-6af30bb6f9dc"
-ipv4 = "10.10.10.1"
-listeners = ["tcp://0.0.0.0:11010","udp://0.0.0.0:11010","wg://0.0.0.0:11011"]
-[network_identity]
-network_name = "ax3600-easytier-study"
-network_secret = "password"
-[[peer]]
-uri = "tcp://public.easytier.top:11010"
-[flags]
-dev_name = "et0"
-enable_exit_node = true
-proxy_networks = "192.168.31.0/24"
-EOT
-
-# --- B. 注册系统服务 (init.d) ---
+# 2. 注册系统服务 (将正确参数直接写入 init.d，避免配置文件失效)
 cat <<EOT > /etc/init.d/easytier
 #!/bin/sh /etc/rc.common
 START=99
 USE_PROCD=1
+
 start_service() {
     procd_open_instance
-    procd_set_param command /usr/bin/easytier-core -c /etc/easytier/config.toml
+    # 核心：直接使用命令行参数，确保 0.0.0.0/0 出口宣告生效
+    procd_set_param command /usr/bin/easytier-core \\
+        --ipv4 10.10.10.1 \\
+        --network-name "ax3600-easytier-study" \\
+        --network-secret "password" \\
+        --peers tcp://public.easytier.top:11010 \\
+        --enable-exit-node \\
+        --proxy-networks 0.0.0.0/0 \\
+        --proxy-forward-by-system \\
+        --dev-name et0
+    
     procd_set_param respawn \${respawn_threshold:-3600} \${respawn_timeout:-5} \${respawn_retry:-5}
     procd_set_param stderr 1
     procd_set_param stdout 1
     procd_close_instance
 }
-stop_service() { killall easytier-core; }
+
+stop_service() {
+    killall -9 easytier-core 2>/dev/null
+}
 EOT
 chmod +x /etc/init.d/easytier
 
-# --- C. 强制开启内核转发 ---
+# 3. 开启内核 IP 转发 (必须)
 sysctl -w net.ipv4.ip_forward=1
 sed -i '/net.ipv4.ip_forward/d' /etc/sysctl.conf
 echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 
-# --- D. 核心修复：防火墙永久 NAT 转发与 Include 挂载 ---
-# 创建 nftables 规则文件
+# 4. 防火墙 nftables 固化 (解决出口流量被拦截问题)
 cat <<EOT > /etc/easytier/custom_fw.nft
 table inet fw4 {
     chain srcnat_easytier {
         type nat hook postrouting priority srcnat; policy accept;
-        ip saddr 10.10.10.0/24 counter masquerade comment "Force_EasyTier_NAT"
+        ip saddr 10.10.10.0/24 counter masquerade comment "EasyTier_Exit_NAT"
     }
     chain forward_easytier {
         type filter hook forward priority filter; policy accept;
-        iifname "et0" accept comment "Accept_EasyTier_Inbound"
-        oifname "et0" accept comment "Accept_EasyTier_Outbound"
+        iifname "et0" accept comment "EasyTier_In"
+        oifname "et0" accept comment "EasyTier_Out"
     }
 }
 EOT
 
-# 创建应用脚本供防火墙调用
-cat <<EOT > /etc/easytier/apply_nft.sh
-#!/bin/sh
-nft -f /etc/easytier/custom_fw.nft
-EOT
-chmod +x /etc/easytier/apply_nft.sh
-
-# 将脚本挂载到系统防火墙 (重启不丢失)
+# 挂载到系统防火墙
 uci del firewall.easytier_fix 2>/dev/null
 uci set firewall.easytier_fix=include
 uci set firewall.easytier_fix.type='script'
 uci set firewall.easytier_fix.path='/etc/easytier/apply_nft.sh'
 uci commit firewall
 
-# --- E. 激活服务 ---
+cat <<EOT > /etc/easytier/apply_nft.sh
+#!/bin/sh
+nft -f /etc/easytier/custom_fw.nft
+EOT
+chmod +x /etc/easytier/apply_nft.sh
+
+# 5. 激活服务
 /etc/init.d/firewall restart
 /etc/easytier/apply_nft.sh
 killall -9 easytier-core 2>/dev/null
@@ -85,46 +111,11 @@ killall -9 easytier-core 2>/dev/null
 /etc/init.d/easytier restart
 
 echo "-----------------------------------------------"
-echo -e "\033[32m[OK] 部署完成！Exit Node NAT 规则已强制注入。\033[0m"
+echo -e "\033[32m[SUCCESS] 出口节点已固化！Proxy CIDRs 已强制设为 0.0.0.0/0\033[0m"
 echo "-----------------------------------------------"
 EOF
 
-# 2. 创建快捷管理菜单 'et'
-cat << 'EOF' > /usr/bin/et
-#!/bin/sh
-G='\033[0;32m'; R='\033[0;31m'; Y='\033[0;33m'; NC='\033[0m'
-while true; do
-    clear
-    echo -e "${G}EasyTier AX3600 终极管理菜单${NC}"
-    echo "-----------------------------------------------"
-    echo " 1) [状态] 查看运行情况        4) [启动] 启动服务"
-    echo " 2) [节点] 查看在线 Peer       5) [停止] 停止服务"
-    echo " 3) [路由] 查看虚拟路由        6) [重启] 重启服务"
-    echo "-----------------------------------------------"
-    echo " 7) [配置] 编辑 config.toml    8) [日志] 实时日志"
-    echo " 9) [重装] 执行固化/NAT修复    q) [退出] 离开"
-    echo "-----------------------------------------------"
-    echo -n " 请选择 [1-9/q]: "
-    read choice
-    case $choice in
-        1) echo -e "\n${Y}--- 进程与网卡 ---${NC}"
-           ps | grep easytier-core | grep -v grep
-           ifconfig et0 2>/dev/null || echo "et0 未就绪"
-           read -p "回车继续..." t ;;
-        2) easytier-cli peer; read -p "回车继续..." t ;;
-        3) easytier-cli route; read -p "回车继续..." t ;;
-        4) /etc/init.d/easytier start; sleep 1 ;;
-        5) /etc/init.d/easytier stop; killall -9 easytier-core 2>/dev/null; sleep 1 ;;
-        6) /etc/init.d/easytier restart; sleep 1 ;;
-        7) vi /etc/easytier/config.toml ;;
-        8) echo -e "${Y}Ctrl+C 退出${NC}"; logread -f | grep easytier ;;
-        9) sh /etc/easytier/setup_all_in_one.sh; read -p "固化与修复完成，回车继续..." t ;;
-        q) exit 0 ;;
-    esac
-done
-EOF
-
-# 3. 授权并立刻执行
+# 授权
 chmod +x /etc/easytier/setup_all_in_one.sh
-chmod +x /usr/bin/et
+# 执行
 sh /etc/easytier/setup_all_in_one.sh

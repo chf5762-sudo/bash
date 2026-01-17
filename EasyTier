@@ -1,0 +1,75 @@
+#!/bin/sh
+
+# 定义颜色
+G='\033[0;32m'
+R='\033[0;31m'
+NC='\033[0m'
+
+echo "==============================="
+echo "   EasyTier AX3600 终极管理工具"
+echo "==============================="
+
+# 核心路径定义
+PROG="/usr/bin/easytier-core"
+CONF="/etc/easytier/config.toml"
+INIT_SCRIPT="/etc/init.d/easytier"
+
+show_menu() {
+    echo "1) 启动/重启服务 (Start/Restart)"
+    echo "2) 停止服务 (Stop)"
+    echo "3) 查看状态 (Status/Peers)"
+    echo "4) [核心] 一键固化：创建服务+开机自启+防火墙放行"
+    echo "5) 查看日志 (Logs)"
+    echo "q) 退出"
+    echo -n "请选择操作: "
+}
+
+install_service() {
+    echo "正在创建系统服务脚本..."
+    cat <<EOF > $INIT_SCRIPT
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+start_service() {
+    procd_open_instance
+    procd_set_param command $PROG -c $CONF
+    procd_set_param respawn \${respawn_threshold:-3600} \${respawn_timeout:-5} \${respawn_retry:-5}
+    procd_set_param stderr 1
+    procd_set_param stdout 1
+    procd_close_instance
+}
+EOF
+    chmod +x $INIT_SCRIPT
+    $INIT_SCRIPT enable
+    echo -e "${G}服务脚本已创建并设为开机自启。${NC}"
+
+    echo "正在固化防火墙 (nftables)..."
+    uci add_list firewall.@zone[0].device='et0'
+    uci set firewall.@zone[0].masq='1'
+    uci commit firewall
+    /etc/init.d/firewall restart
+    echo -e "${G}防火墙 et0 已放行并开启 NAT 伪装。${NC}"
+    
+    $INIT_SCRIPT start
+    echo -e "${G}所有固化操作已完成，EasyTier 已转为后台服务运行！${NC}"
+}
+
+while true; do
+    show_menu
+    read choice
+    case $choice in
+        1) $INIT_SCRIPT restart && echo "服务已就绪" ;;
+        2) $INIT_SCRIPT stop && echo "服务已停止" ;;
+        3) 
+            echo -e "${G}--- 运行进程 ---${NC}"
+            ps | grep easytier-core | grep -v grep
+            echo -e "${G}--- 节点连接 ---${NC}"
+            easytier-cli peer
+            ;;
+        4) install_service ;;
+        5) logread | grep easytier ;;
+        q) exit 0 ;;
+        *) echo -e "${R}无效选择${NC}" ;;
+    esac
+    echo ""
+done

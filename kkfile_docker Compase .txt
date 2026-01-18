@@ -1,0 +1,65 @@
+cat << 'EOF' > update_kkfileview.sh
+#!/bin/bash
+
+# 1. 定义变量
+BASE_DIR="/opt/kkfileview"
+CONF_DIR="$BASE_DIR/config"
+LOG_DIR="$BASE_DIR/log"
+OLD_CONTAINER="kkfileview"
+
+echo "🚀 开始更新 kkFileView 配置并迁移至 Docker Compose..."
+
+# 2. 创建持久化目录
+mkdir -p $CONF_DIR $LOG_DIR
+
+# 3. 备份原始配置 (如果容器存在)
+if [ "$(docker ps -q -f name=$OLD_CONTAINER)" ]; then
+    echo "📦 正在从旧容器备份配置文件..."
+    docker cp $OLD_CONTAINER:/opt/kkFileView-4.4.0-beta/config/application.properties $CONF_DIR/
+else
+    echo "⚠️ 未发现运行中的旧容器，请确保 /opt/kkfileview/config/application.properties 已存在。"
+fi
+
+# 4. 停止并删除旧容器
+echo "🗑️ 清理旧容器..."
+docker stop $OLD_CONTAINER 2>/dev/null
+docker rm $OLD_CONTAINER 2>/dev/null
+
+# 5. 生成 docker-compose.yml
+echo "📝 生成 docker-compose.yml..."
+cat << 'COMPOSE' > docker-compose.yml
+version: '3.8'
+services:
+  kkfileview:
+    image: yimik/kkfileview:latest
+    container_name: kkfileview
+    restart: always
+    ports:
+      - "8012:8012"
+    volumes:
+      - /opt/kkfileview/config:/opt/kkFileView-4.4.0-beta/config
+      - /opt/kkfileview/log:/opt/kkFileView-4.4.0-beta/log
+    environment:
+      - KK_TRUST_HOST=*.beundredig.eu.org
+      - LC_ALL=en_US.UTF-8
+      - LANG=en_US.UTF-8
+    command: >
+      sh -c 'java -Dtrust.host="*.beundredig.eu.org" 
+      -Dfile.encoding=UTF-8 
+      -Dspring.config.location=/opt/kkFileView-4.4.0-beta/config/application.properties 
+      -jar /opt/kkFileView-4.4.0-beta/bin/kkFileView-4.4.0-beta.jar 
+      --trust.host="*.beundredig.eu.org"'
+COMPOSE
+
+# 6. 启动新容器
+echo "🏗️ 正在通过 Docker Compose 启动..."
+docker compose up -d
+
+echo "✅ 执行完毕！"
+echo "🌐 信任域名已设置为: *.beundredig.eu.org"
+echo "📂 配置文件位置: /opt/kkfileview/config/application.properties"
+EOF
+
+# 赋予执行权限并运行
+chmod +x update_kkfileview.sh
+./update_kkfileview.sh

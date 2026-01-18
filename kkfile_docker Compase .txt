@@ -1,65 +1,85 @@
-cat << 'EOF' > update_kkfileview.sh
 #!/bin/bash
 
-# 1. 定义变量
-BASE_DIR="/opt/kkfileview"
-CONF_DIR="$BASE_DIR/config"
-LOG_DIR="$BASE_DIR/log"
-OLD_CONTAINER="kkfileview"
+# =================================================================
+# 【关键技术点注释 - 必读】
+# 1. auto_https disable_redirects: 
+#    核心配置。禁用 Caddy 强制将 HTTP 转为 HTTPS。
+#    原因：kkFileView 后端下载文件时会走 80 端口，如果被重定向到 HTTPS 网页，
+#    Java 引擎会下载到 HTML 源码而非文件二进制，导致“不支持该文件类型”报错。
+#
+# 2. KK_BASE_URL:
+#    解决“空白页面/JPG图标”的关键。告诉 kkFileView 外部访问地址是 HTTPS。
+#    这样生成的 JS/CSS/图片 链接全是 https://，解决浏览器的 Mixed Content 拦截。
+#
+# 3. 显式 http:// 域名绑定:
+#    在禁用自动重定向后，必须手动写出 http://域名，否则 Caddy 不会监听 80 端口。
+#
+# 4. 架构适配:
+#    针对 Oracle ARM 等环境，脚本自动开启防火墙 80 端口。
+# =================================================================
 
-echo "🚀 开始更新 kkFileView 配置并迁移至 Docker Compose..."
+echo "开始执行终极修复方案..."
 
-# 2. 创建持久化目录
-mkdir -p $CONF_DIR $LOG_DIR
+# --- 1. 备份并重写 Caddy 配置 ---
+cat <<EOF > /etc/caddy/Caddyfile
+{
+    # 全局：禁用强制跳转，定义标准端口
+    auto_https disable_redirects
+    http_port 80
+    https_port 443
+}
 
-# 3. 备份原始配置 (如果容器存在)
-if [ "$(docker ps -q -f name=$OLD_CONTAINER)" ]; then
-    echo "📦 正在从旧容器备份配置文件..."
-    docker cp $OLD_CONTAINER:/opt/kkFileView-4.4.0-beta/config/application.properties $CONF_DIR/
-else
-    echo "⚠️ 未发现运行中的旧容器，请确保 /opt/kkfileview/config/application.properties 已存在。"
-fi
+# 预览服务域名 (同时监听 http 和 https)
+http://kkfileview.beundredig.eu.org, https://kkfileview.beundredig.eu.org, http://vps1.beundredig.eu.org, https://vps1.beundredig.eu.org {
+    reverse_proxy localhost:8012 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+    }
+}
 
-# 4. 停止并删除旧容器
-echo "🗑️ 清理旧容器..."
-docker stop $OLD_CONTAINER 2>/dev/null
-docker rm $OLD_CONTAINER 2>/dev/null
+# n8n 自动化平台
+http://n8n.beundredig.eu.org, https://n8n.beundredig.eu.org {
+    reverse_proxy localhost:5678 {
+        header_up X-Forwarded-Proto https
+        header_up Host {host}
+    }
+}
 
-# 5. 生成 docker-compose.yml
-echo "📝 生成 docker-compose.yml..."
-cat << 'COMPOSE' > docker-compose.yml
-version: '3.8'
-services:
-  kkfileview:
-    image: yimik/kkfileview:latest
-    container_name: kkfileview
-    restart: always
-    ports:
-      - "8012:8012"
-    volumes:
-      - /opt/kkfileview/config:/opt/kkFileView-4.4.0-beta/config
-      - /opt/kkfileview/log:/opt/kkFileView-4.4.0-beta/log
-    environment:
-      - KK_TRUST_HOST=*.beundredig.eu.org
-      - LC_ALL=en_US.UTF-8
-      - LANG=en_US.UTF-8
-    command: >
-      sh -c 'java -Dtrust.host="*.beundredig.eu.org" 
-      -Dfile.encoding=UTF-8 
-      -Dspring.config.location=/opt/kkFileView-4.4.0-beta/config/application.properties 
-      -jar /opt/kkFileView-4.4.0-beta/bin/kkFileView-4.4.0-beta.jar 
-      --trust.host="*.beundredig.eu.org"'
-COMPOSE
-
-# 6. 启动新容器
-echo "🏗️ 正在通过 Docker Compose 启动..."
-docker compose up -d
-
-echo "✅ 执行完毕！"
-echo "🌐 信任域名已设置为: *.beundredig.eu.org"
-echo "📂 配置文件位置: /opt/kkfileview/config/application.properties"
+# 1Panel 端口转发 (如有其他端口请在此补充)
+1panel-vps1.beundredig.eu.org:39391 {
+    reverse_proxy 127.0.0.1:39390
+}
 EOF
 
-# 赋予执行权限并运行
-chmod +x update_kkfileview.sh
-./update_kkfileview.sh
+# --- 2. 重启 Caddy 并放行防火墙 ---
+echo "正在重启 Caddy 服务并开放防火墙端口..."
+systemctl restart caddy
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+sudo ufw allow 80/tcp >/dev/null 2>&1
+
+# --- 3. 重构 kkFileView 容器 (使用 yimik/kkfileview:latest) ---
+echo "正在重构 kkFileView 容器并注入 HTTPS 变量..."
+docker stop kkfileview >/dev/null 2>&1
+docker rm kkfileview >/dev/null 2>&1
+
+docker run -d \\
+  --name kkfileview \\
+  -p 8012:8012 \\
+  -e KK_BASE_URL="https://kkfileview.beundredig.eu.org" \\
+  --restart always \\
+  yimik/kkfileview:latest
+
+# --- 4. 清理旧缓存 (防止之前的坏文件干扰) ---
+echo "正在清理旧的转换缓存..."
+sleep 2 # 等待容器启动
+docker exec -it kkfileview rm -rf /opt/kkFileView-4.4.0-beta/file/* >/dev/null 2>&1
+
+# --- 5. 最终检查 ---
+echo "-----------------------------------------------"
+echo "✅ 修复脚本执行完毕！"
+echo "检查环境变量状态："
+docker inspect kkfileview | grep KK_BASE_URL
+echo "检查 80 端口状态："
+netstat -tunlp | grep :80
+echo "-----------------------------------------------"
+echo "提示：如果浏览器仍有异常，请务必使用【无痕模式】测试，以排除浏览器缓存干扰。"

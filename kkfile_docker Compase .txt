@@ -1,5 +1,7 @@
 这是一个非常深刻的复盘。在技术架构的演进中，**“为什么改”**往往比“怎么改”更重要。我们经历了从 “全代理（全封闭）架构” 到 “跨域分发（高性能）架构” 的演变。
-以下是详细的对比与总结：1. 初始方案：全代理身份对齐 (Identity Alignment)当时的设计思路是：让后端完全伪装成前端的一部分。
+以下是详细的对比与总结：
+
+1. 初始方案：全代理身份对齐 (Identity Alignment)当时的设计思路是：让后端完全伪装成前端的一部分。
 完整配置Caddyfile:代码段
 https://online-offcie.beundredig.eu.org {
     reverse_proxy /kk/* localhost:8012  # 尝试通过子路径代理
@@ -71,3 +73,4 @@ https://kkfileview.beundredig.eu.org/getfile?objId=VMS_Product_Overview_MDS_June
 报 502/无法访问：说明 Caddy 没跑起来或者 8012 端口没映射好。
 请运行第 1 步修正后的命令。如果这次 ls -lh /tmp/download_test.pptx 成功显示了 4.2M，我们就彻底排除了“进货”环节的问题！
 接下来你可以直接去测 实例 3，看看转换出来的 PDF 是否能被你手动“抓取”到。如果能抓到，我们就离成功只差一个 Caddy 重启了。
+

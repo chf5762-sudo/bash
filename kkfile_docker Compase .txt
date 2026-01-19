@@ -37,3 +37,37 @@ Access-Control 头，否则浏览器会锁死数据流。Office 进程默认 (1�
 现在改为“明线”连接，通过 CORS 协议 授权，这是分布式系统最标准、最高效的做法。测试方法的重要性：你之前通过 ls -lh 发现 PDF 已经生成，但控制台却报 404，这是最关键的突破口。它直接证明了“引擎没坏，是路指错了”。
 ARM 适配：对于 Oracle ARM 这种机器，超时时间 (TIMEOUT) 和 并发限制 (POOL_SIZE) 是生产环境的生命线。下一步建议：现在你可以放心地使用 最新方案。如果你未来需要将这个架构扩展到其他项目，只需修改 Access-Control-Allow-Origin
 中的域名即可实现一秒复刻。目前 PPT 的预览界面能够正常操作了吗？
+
+
+分布测试方法：
+1.  (实例 1：进货验证)
+# 定义变量，避免手动拼接空格导致错误
+TARGET_URL="https://online-offcie.beundredig.eu.org/api/file-proxy/VMS_Product_Overview_MDS_June_2012_Rev%2003.pptx"
+curl -L -v \
+  -G --data-urlencode "path=inventory/VMS_Product_Overview_MDS_June_2012_Rev 03.pptx" \
+  --data-urlencode "token=Allow_Public_Preview_Access_2025" \
+  -o /tmp/download_test.pptx \
+  "$TARGET_URL"
+  
+2. 实例 2：生产线监控 (验证转换是否开始)
+如果上面的下载成功了，我们要看 kkFileView 拿到文件后，LibreOffice 有没有在干活。
+立即在 VPS 运行此命令：
+Bash
+# 查看容器内临时文件的生成情况
+docker exec kkfileview ls -R /opt/kkFileView-4.4.0-beta/file/
+故障表现实例：
+如果文件夹里只有 .pptx：说明下载成功了，但 LibreOffice 没启动（检查进程）。
+如果文件夹里出现了 .pdf 且大小在跳动：说明 正在转换，只需等待。
+如果什么都没有：说明 下载失败 或 路径完全没对上。
+
+3. 实例 3：出货验证 (验证前端能不能取到)
+这是解决你“前端白屏”最关键的测试。我们模拟浏览器去请求那个已经转好的 PDF。
+具体测试 URL (直接复制到浏览器地址栏)：
+Plaintext
+https://kkfileview.beundredig.eu.org/getfile?objId=VMS_Product_Overview_MDS_June_2012_Rev%2003.pptx.pdf
+诊断逻辑：
+能下载 PDF：说明后端没问题。如果前端还白屏，那 100% 是前端域名 (online-offcie) 跨域请求被 Caddy 拦住了。
+报 404：说明 objId（缓存文件名）不对，或者 KK_BASE_URL 还没生效。
+报 502/无法访问：说明 Caddy 没跑起来或者 8012 端口没映射好。
+请运行第 1 步修正后的命令。如果这次 ls -lh /tmp/download_test.pptx 成功显示了 4.2M，我们就彻底排除了“进货”环节的问题！
+接下来你可以直接去测 实例 3，看看转换出来的 PDF 是否能被你手动“抓取”到。如果能抓到，我们就离成功只差一个 Caddy 重启了。

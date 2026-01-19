@@ -1,85 +1,39 @@
-#!/bin/bash
-
-# =================================================================
-# 【关键技术点注释 - 必读】
-# 1. auto_https disable_redirects: 
-#    核心配置。禁用 Caddy 强制将 HTTP 转为 HTTPS。
-#    原因：kkFileView 后端下载文件时会走 80 端口，如果被重定向到 HTTPS 网页，
-#    Java 引擎会下载到 HTML 源码而非文件二进制，导致“不支持该文件类型”报错。
-#
-# 2. KK_BASE_URL:
-#    解决“空白页面/JPG图标”的关键。告诉 kkFileView 外部访问地址是 HTTPS。
-#    这样生成的 JS/CSS/图片 链接全是 https://，解决浏览器的 Mixed Content 拦截。
-#
-# 3. 显式 http:// 域名绑定:
-#    在禁用自动重定向后，必须手动写出 http://域名，否则 Caddy 不会监听 80 端口。
-#
-# 4. 架构适配:
-#    针对 Oracle ARM 等环境，脚本自动开启防火墙 80 端口。
-# =================================================================
-
-echo "开始执行终极修复方案..."
-
-# --- 1. 备份并重写 Caddy 配置 ---
-cat <<EOF > /etc/caddy/Caddyfile
-{
-    # 全局：禁用强制跳转，定义标准端口
-    auto_https disable_redirects
-    http_port 80
-    https_port 443
+这是一个非常深刻的复盘。在技术架构的演进中，**“为什么改”**往往比“怎么改”更重要。我们经历了从 “全代理（全封闭）架构” 到 “跨域分发（高性能）架构” 的演变。
+以下是详细的对比与总结：1. 初始方案：全代理身份对齐 (Identity Alignment)当时的设计思路是：让后端完全伪装成前端的一部分。
+完整配置Caddyfile:代码段
+https://online-offcie.beundredig.eu.org {
+    reverse_proxy /kk/* localhost:8012  # 尝试通过子路径代理
 }
-
-# 预览服务域名 (同时监听 http 和 https)
-http://kkfileview.beundredig.eu.org, https://kkfileview.beundredig.eu.org, http://vps1.beundredig.eu.org, https://vps1.beundredig.eu.org {
-    reverse_proxy localhost:8012 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-    }
-}
-
-# n8n 自动化平台
-http://n8n.beundredig.eu.org, https://n8n.beundredig.eu.org {
-    reverse_proxy localhost:5678 {
-        header_up X-Forwarded-Proto https
-        header_up Host {host}
-    }
-}
-
-# 1Panel 端口转发 (如有其他端口请在此补充)
-1panel-vps1.beundredig.eu.org:39391 {
-    reverse_proxy 127.0.0.1:39390
-}
-EOF
-
-# --- 2. 重启 Caddy 并放行防火墙 ---
-echo "正在重启 Caddy 服务并开放防火墙端口..."
-systemctl restart caddy
-sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-sudo ufw allow 80/tcp >/dev/null 2>&1
-
-# --- 3. 重构 kkFileView 容器 (使用 yimik/kkfileview:latest) ---
-echo "正在重构 kkFileView 容器并注入 HTTPS 变量..."
-docker stop kkfileview >/dev/null 2>&1
-docker rm kkfileview >/dev/null 2>&1
-
-docker run -d \\
-  --name kkfileview \\
-  -p 8012:8012 \\
-  -e KK_BASE_URL="https://kkfileview.beundredig.eu.org" \\
-  --restart always \\
+Docker 指令:Bashdocker run -d --name kkfileview \
+  -e KK_BASE_URL="https://online-offcie.beundredig.eu.org" \
   yimik/kkfileview:latest
 
-# --- 4. 清理旧缓存 (防止之前的坏文件干扰) ---
-echo "正在清理旧的转换缓存..."
-sleep 2 # 等待容器启动
-docker exec -it kkfileview rm -rf /opt/kkFileView-4.4.0-beta/file/* >/dev/null 2>&1
+详细解释与局限性逻辑：将 KK_BASE_URL 设为前端域名，试图让所有流量走 Cloudflare Workers 转发。局限性：Cloudflare Workers 并没有配置处理
+getCorsFile 或 pdf.js 相关静态资源的路由逻辑。导致前端虽然拿到了预览页，但去取具体的 PDF 数据流时，向 Workers 请求，Workers 却报了 404。
+2. 最新方案：跨域分发架构 (CORS-Enabled Distribution)现在的设计思路是：前端跑前端的，后端跑后端的，通过 Caddy 授权“跨域取货”。完整配置Caddyfile (核心在 Header):代码段
+https://kkfileview.beundredig.eu.org {
+    reverse_proxy localhost:8012
+    header {
+        # 允许前端域名跨域读取
+        Access-Control-Allow-Origin "https://online-offcie.beundredig.eu.org"
+        Access-Control-Allow-Methods "GET, POST, OPTIONS"
+        Access-Control-Allow-Headers "*"
+        Access-Control-Expose-Headers "*"
+    }
+}
+Docker 指令 (ARM 深度优化版):Bashdocker stop kkfileview && docker rm kkfileview
+docker run -d --name kkfileview -p 8012:8012 --restart always \
+  -e KK_BASE_URL="https://kkfileview.beundredig.eu.org" \
+  -e KK_OFFICE_PORT="2001,2002" \
+  -e KK_OFFICE_CONVERT_TIMEOUT="600" \
+  -e KK_RELOAD_POOL_SIZE="1" \
+  -e KK_VERIFY_REST_URL="false" \
+  yimik/kkfileview:latest
 
-# --- 5. 最终检查 ---
-echo "-----------------------------------------------"
-echo "✅ 修复脚本执行完毕！"
-echo "检查环境变量状态："
-docker inspect kkfileview | grep KK_BASE_URL
-echo "检查 80 端口状态："
-netstat -tunlp | grep :80
-echo "-----------------------------------------------"
-echo "提示：如果浏览器仍有异常，请务必使用【无痕模式】测试，以排除浏览器缓存干扰。"
+3. 核心对比：为什么前后要这样改？特性初始方案 (Identity Alignment)最新方案 (CORS-Enabled)改变的原因KK_BASE_URL指向前端域名指向后端域名 (VPS)解决 404。
+因为转换后的 PDF 物理存储在 VPS 上，必须让生成的 URL 指向 VPS 才能取到文件。Caddy 角色简单的反向代理身份授权网关 (CORS)解决跨域拦截。域名不一致时，必须手动注入
+Access-Control 头，否则浏览器会锁死数据流。Office 进程默认 (1个端口)双端口 (2001,2002)解决启动难。ARM 架构初始化不稳定，双进程极大提高了 LibreOffice 的存活率。并发限制未限制池大小 = 1内存保护。
+防止转换 4MB+ 的大 PPT 时，多个进程把 1-2G 内存挤爆导致容器重启。4. 技术复盘总结路径逻辑的修正：最开始我们想把后端藏在前端后面，但因为 Cloudflare Workers 端没有做对应的 API 转发逻辑，导致“路不通”。
+现在改为“明线”连接，通过 CORS 协议 授权，这是分布式系统最标准、最高效的做法。测试方法的重要性：你之前通过 ls -lh 发现 PDF 已经生成，但控制台却报 404，这是最关键的突破口。它直接证明了“引擎没坏，是路指错了”。
+ARM 适配：对于 Oracle ARM 这种机器，超时时间 (TIMEOUT) 和 并发限制 (POOL_SIZE) 是生产环境的生命线。下一步建议：现在你可以放心地使用 最新方案。如果你未来需要将这个架构扩展到其他项目，只需修改 Access-Control-Allow-Origin
+中的域名即可实现一秒复刻。目前 PPT 的预览界面能够正常操作了吗？

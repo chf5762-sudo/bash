@@ -1,18 +1,5 @@
-这是一个非常深刻的复盘。在技术架构的演进中，**“为什么改”**往往比“怎么改”更重要。我们经历了从 “全代理（全封闭）架构” 到 “跨域分发（高性能）架构” 的演变。
-以下是详细的对比与总结：
-
-1. 初始方案：全代理身份对齐 (Identity Alignment)当时的设计思路是：让后端完全伪装成前端的一部分。
-完整配置Caddyfile:代码段
-https://online-offcie.beundredig.eu.org {
-    reverse_proxy /kk/* localhost:8012  # 尝试通过子路径代理
-}
-Docker 指令:Bashdocker run -d --name kkfileview \
-  -e KK_BASE_URL="https://online-offcie.beundredig.eu.org" \
-  yimik/kkfileview:latest
-
-详细解释与局限性逻辑：将 KK_BASE_URL 设为前端域名，试图让所有流量走 Cloudflare Workers 转发。局限性：Cloudflare Workers 并没有配置处理
-getCorsFile 或 pdf.js 相关静态资源的路由逻辑。导致前端虽然拿到了预览页，但去取具体的 PDF 数据流时，向 Workers 请求，Workers 却报了 404。
-2. 最新方案：跨域分发架构 (CORS-Enabled Distribution)现在的设计思路是：前端跑前端的，后端跑后端的，通过 Caddy 授权“跨域取货”。完整配置Caddyfile (核心在 Header):代码段
+在技术架构的演进中，**“为什么改”**往往比“怎么改”更重要。我们经历了从 “全代理（全封闭）架构” 到 “跨域分发（高性能）架构” 的演变。
+ 最新方案：跨域分发架构 (CORS-Enabled Distribution)现在的设计思路是：前端跑前端的，后端跑后端的，通过 Caddy 授权“跨域取货”。完整配置Caddyfile (核心在 Header):代码段
 https://kkfileview.beundredig.eu.org {
     reverse_proxy localhost:8012
     header {
@@ -32,7 +19,8 @@ docker run -d --name kkfileview -p 8012:8012 --restart always \
   -e KK_VERIFY_REST_URL="false" \
   yimik/kkfileview:latest
 
-3. 核心对比：为什么前后要这样改？特性初始方案 (Identity Alignment)最新方案 (CORS-Enabled)改变的原因KK_BASE_URL指向前端域名指向后端域名 (VPS)解决 404。
+
+核心对比：为什么前后要这样改？特性初始方案 (Identity Alignment)最新方案 (CORS-Enabled)改变的原因KK_BASE_URL指向前端域名指向后端域名 (VPS)解决 404。
 因为转换后的 PDF 物理存储在 VPS 上，必须让生成的 URL 指向 VPS 才能取到文件。Caddy 角色简单的反向代理身份授权网关 (CORS)解决跨域拦截。域名不一致时，必须手动注入
 Access-Control 头，否则浏览器会锁死数据流。Office 进程默认 (1个端口)双端口 (2001,2002)解决启动难。ARM 架构初始化不稳定，双进程极大提高了 LibreOffice 的存活率。并发限制未限制池大小 = 1内存保护。
 防止转换 4MB+ 的大 PPT 时，多个进程把 1-2G 内存挤爆导致容器重启。4. 技术复盘总结路径逻辑的修正：最开始我们想把后端藏在前端后面，但因为 Cloudflare Workers 端没有做对应的 API 转发逻辑，导致“路不通”。
@@ -73,4 +61,5 @@ https://kkfileview.beundredig.eu.org/getfile?objId=VMS_Product_Overview_MDS_June
 报 502/无法访问：说明 Caddy 没跑起来或者 8012 端口没映射好。
 请运行第 1 步修正后的命令。如果这次 ls -lh /tmp/download_test.pptx 成功显示了 4.2M，我们就彻底排除了“进货”环节的问题！
 接下来你可以直接去测 实例 3，看看转换出来的 PDF 是否能被你手动“抓取”到。如果能抓到，我们就离成功只差一个 Caddy 重启了。
+
 

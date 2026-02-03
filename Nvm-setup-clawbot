@@ -3,108 +3,129 @@
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
+YELLOW='\1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${GREEN}===============================================${NC}"
-echo -e "${GREEN}   ClawBot (OpenClaw) 环境全能修复脚本 V2.0    ${NC}"
-echo -e "${GREEN}   支持架构: ARM / x86_64 | 适配: Node v22     ${NC}"
-echo -e "${GREEN}===============================================${NC}"
+PROJECT_DIR="/root/openclaw"
+IMAGE_NAME="openclaw-custom"
+CONTAINER_NAME="openclaw-app"
 
+echo -e "${BLUE}=================================================${NC}"
+echo -e "${BLUE}    OpenClaw (ClawBot) 终极维护脚本 V5.0        ${NC}"
+echo -e "${BLUE}    模式：传统环境修复 + 物理环境转 Docker      ${NC}"
+echo -e "${BLUE}=================================================${NC}"
+
+# 菜单函数
 menu() {
     echo -e "\n${YELLOW}请选择操作：${NC}"
-    echo -e "1. 【清理】彻底卸载系统旧版 Node.js (解决路径冲突)"
-    echo -e "2. 【清空】强力删除 NVM 及所有残留 (环境重置)"
-    echo -e "3. 【安装】部署 NVM 与 Node v22 + pnpm (核心环境)"
-    echo -e "4. 【部署】一键安装、编译并启动 ClawBot"
+    echo -e "1. 【环境修复】清理系统冲突、重装 Node v22/pnpm"
+    echo -e "2. 【项目自检】运行官方 doctor 自动修复配置并编译"
+    echo -e "3. 【Docker准备】安装 Docker 与 Compose 环境"
+    echo -e "4. 【打包镜像】将当前修好的本地环境直接封印成 Docker"
+    echo -e "5. 【启动管理】查看日志 / 重启容器"
     echo -e "0. 退出脚本"
-    echo "-----------------------------------------------"
-    read -p "请输入数字 [0-4]: " choice
+    echo "-------------------------------------------------"
+    read -p "请输入数字 [0-5]: " choice
 
     case $choice in
-        1) clean_system_node ;;
-        2) deep_purge ;;
-        3) install_env ;;
-        4) install_clawbot ;;
+        1) setup_node_env ;;
+        2) fix_project ;;
+        3) install_docker ;;
+        4) build_docker_from_local ;;
+        5) manage_container ;;
         0) exit 0 ;;
-        *) echo -e "${RED}无效输入，请重新选择${NC}"; menu ;;
+        *) menu ;;
     esac
 }
 
-# 1. 彻底卸载系统自带 Node
-clean_system_node() {
-    echo -e "${YELLOW}正在清理系统级 Node.js...${NC}"
-    sudo apt-get remove --purge -y nodejs npm
-    sudo apt-get autoremove -y
-    sudo rm -rf /usr/local/bin/node /usr/local/bin/npm /usr/local/lib/node_modules
-    sudo rm -rf /usr/bin/node /usr/bin/npm
-    echo -e "${GREEN}系统级环境已清理干净！${NC}"
-    menu
-}
-
-# 2. 强力清除所有 NVM 残留
-deep_purge() {
-    echo -e "${RED}警告：这将删除所有已安装的 Node 版本和 NVM 配置！${NC}"
-    read -p "确定要重置吗? (y/n): " confirm
-    if [ "$confirm" == "y" ]; then
-        rm -rf ~/.nvm ~/.npm ~/.pnpm-state
-        sed -i '/NVM_DIR/d' ~/.bashrc
-        echo -e "${GREEN}环境已完全清空，请重新连接 SSH 或运行 'source ~/.bashrc'。${NC}"
-    fi
-    menu
-}
-
-# 3. 安装 NVM、Node v22 和 pnpm
-install_env() {
-    echo -e "${YELLOW}正在安装 NVM (Node Version Manager)...${NC}"
-    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+# 1. 环境修复：解决 NVM 与系统路径冲突
+setup_node_env() {
+    echo -e "${YELLOW}清理系统冲突中...${NC}"
+    apt-get remove -y nodejs npm >/dev/null 2>&1
+    rm -rf ~/.nvm ~/.npm
     
-    # 立即激活 NVM
+    echo -e "${YELLOW}安装 NVM & Node v22...${NC}"
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    nvm install 22 && nvm use 22 && nvm alias default 22
     
-    echo -e "${YELLOW}正在安装 Node v22 (当前最稳定版本)...${NC}"
-    nvm install 22
-    nvm use 22
-    nvm alias default 22
-    
-    echo -e "${YELLOW}安装全局必备工具 (pnpm & pm2)...${NC}"
     npm install -g pnpm pm2
+    echo -e "${GREEN}Node 环境修复完成：$(node -v)${NC}"
+    menu
+}
+
+# 2. 项目自检：运行 doctor 并生成编译产物
+fix_project() {
+    echo -e "${YELLOW}进入项目目录: $PROJECT_DIR${NC}"
+    cd $PROJECT_DIR || exit
     
-    echo -e "${GREEN}环境就绪！当前版本: $(node -v)${NC}"
+    echo -e "${YELLOW}执行官方自检修复...${NC}"
+    npx openclaw doctor --fix
+    
+    echo -e "${YELLOW}重新编译项目...${NC}"
+    pnpm install --legacy-peer-deps && pnpm run build
+    echo -e "${GREEN}项目自检与编译完成！${NC}"
     menu
 }
 
-# 4. 一键安装、编译并启动 ClawBot
-install_clawbot() {
-    if [ ! -d "/root/openclaw" ]; then
-        echo -e "${RED}错误：未在 /root/openclaw 找到源码。请先确保已下载代码。${NC}"
-        menu
-        return
-    fi
-
-    cd /root/openclaw || exit
-
-    echo -e "${YELLOW}正在安装项目依赖...${NC}"
-    # 确保在当前环境下有 pnpm
-    npm install -g pnpm
-    pnpm install
-
-    echo -e "${YELLOW}正在编译 TypeScript (生成 dist 文件夹)...${NC}"
-    pnpm run build
-
-    if [ ! -f ".env" ]; then
-        echo -e "${YELLOW}未检测到配置文件，正在从模板创建...${NC}"
-        cp .env.example .env
-    fi
-
-    echo -e "${GREEN}✅ 编译完成！现在可以启动机器人了。${NC}"
-    read -p "是否立即启动配置菜单? (y/n): " run_now
-    if [ "$run_now" == "y" ]; then
-        npm start
-    fi
+# 3. Docker 环境准备
+install_docker() {
+    echo -e "${YELLOW}正在安装 Docker 引擎...${NC}"
+    curl -fsSL https://get.docker.com | sh
+    systemctl enable --now docker
+    echo -e "${GREEN}Docker 引擎已就绪。${NC}"
     menu
 }
 
-# 启动菜单
+# 4. 核心功能：将本地环境打包成 Docker
+build_docker_from_local() {
+    echo -e "${YELLOW}准备将本地已修好的零件封装进 Docker...${NC}"
+    cd $PROJECT_DIR || exit
+    
+    # 创建 Dockerfile 适配当前环境
+    cat <<EOF > Dockerfile.bundle
+FROM node:22-slim
+WORKDIR /app
+# 直接复制本地已经编译好的代码和所有 node_modules
+COPY . .
+# 针对 ARM 架构安装必要运行库
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+EXPOSE 18789
+CMD ["node", "dist/index.js", "gateway", "--force"]
+EOF
+
+    echo -e "${YELLOW}构建本地专属镜像...${NC}"
+    docker build -t $IMAGE_NAME -f Dockerfile.bundle .
+    
+    echo -e "${YELLOW}清理旧容器并启动新容器...${NC}"
+    docker stop $CONTAINER_NAME 2>/dev/null
+    docker rm $CONTAINER_NAME 2>/dev/null
+    
+    # 挂载本地配置目录，确保存档不丢失
+    docker run -d \
+        --name $CONTAINER_NAME \
+        -p 18789:18789 \
+        -v $PROJECT_DIR/.env:/app/.env \
+        -v /root/.openclaw:/root/.openclaw \
+        --restart always \
+        $IMAGE_NAME
+
+    echo -e "${GREEN}✅ 封装运行成功！程序现在已进入 Docker 安全运行模式。${NC}"
+    menu
+}
+
+# 5. 管理容器日志
+manage_container() {
+    echo -e "${YELLOW}1. 查看实时日志 | 2. 重启容器 | 3. 返回${NC}"
+    read -p "请选择: " sub_choice
+    case $sub_choice in
+        1) docker logs -f $CONTAINER_NAME ;;
+        2) docker restart $CONTAINER_NAME ;;
+        *) menu ;;
+    esac
+}
+
+# 运行脚本
 menu

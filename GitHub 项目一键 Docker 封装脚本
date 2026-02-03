@@ -1,0 +1,153 @@
+#!/bin/bash
+
+# =================================================================
+#  项目名称：通用 GitHub 一键 Docker 部署脚本 (V10.0)
+#  支持架构：ARM64 (Oracle VPS) / x86_64 (AMD/Intel)
+#  适配语言：Node.js, Python, 静态网页
+# =================================================================
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 默认全局配置
+BASE_DEPLOY_DIR="/root/apps"
+DEFAULT_NODE_VER="22"
+
+# 权限检查
+if [ "$EUID" -ne 0 ]; then 
+  echo -e "${RED}错误：请使用 root 权限运行此脚本。${NC}"
+  exit 1
+fi
+
+# 1. 基础环境自愈函数
+check_env() {
+    echo -e "${BLUE}[1/5] 检查系统环境...${NC}"
+    # 安装 Docker
+    if ! command -v docker &> /dev/null; then
+        echo -e "${YELLOW}正在安装 Docker...${NC}"
+        curl -fsSL https://get.docker.com | sh
+        systemctl enable --now docker
+    fi
+    # 安装 Git
+    if ! command -v git &> /dev/null; then
+        apt-get update && apt-get install -y git
+    fi
+}
+
+# 2. 部署核心逻辑
+deploy_project() {
+    echo -e "${GREEN}===============================================${NC}"
+    read -p "请输入 GitHub 仓库地址: " REPO_URL
+    if [ -z "$REPO_URL" ]; then
+        echo -e "${RED}仓库地址不能为空！${NC}"
+        return
+    fi
+
+    PROJ_NAME=$(basename -s .git "$REPO_URL")
+    PROJ_DIR="$BASE_DEPLOY_DIR/$PROJ_NAME"
+
+    # 拉取或更新源码
+    mkdir -p "$BASE_DEPLOY_DIR"
+    if [ -d "$PROJ_DIR" ]; then
+        echo -e "${BLUE}[2/5] 项目已存在，正在更新源码...${NC}"
+        cd "$PROJ_DIR" && git pull
+    else
+        echo -e "${BLUE}[2/5] 正在克隆源码到 $PROJ_DIR ...${NC}"
+        git clone "$REPO_URL" "$PROJ_DIR"
+    fi
+
+    cd "$PROJ_DIR" || exit
+
+    # 智能识别项目类型
+    echo -e "${BLUE}[3/5] 智能分析项目类型并生成 Dockerfile...${NC}"
+    
+    if [ -f "package.json" ]; then
+        echo -e "${GREEN}检测到 Node.js 项目${NC}"
+        DOCKER_BASE="node:${DEFAULT_NODE_VER}-slim"
+        # 兼容 OpenClaw 的特殊启动逻辑
+        if [[ "$PROJ_NAME" == *"openclaw"* ]]; then
+            BUILD_CMD="npm install -g pnpm && pnpm install --legacy-peer-deps && pnpm run build"
+            START_CMD='["node", "dist/index.js", "gateway", "--force"]'
+        else
+            BUILD_CMD="npm install --only=production"
+            START_CMD='["npm", "start"]'
+        fi
+    elif [ -f "requirements.txt" ]; then
+        echo -e "${GREEN}检测到 Python 项目${NC}"
+        DOCKER_BASE="python:3.11-slim"
+        BUILD_CMD="pip install --no-cache-dir -r requirements.txt"
+        START_CMD='["python", "app.py"]'
+    else
+        echo -e "${YELLOW}未知项目类型，使用通用容器环境...${NC}"
+        DOCKER_BASE="node:slim"
+        BUILD_CMD="echo 'No specific build steps found'"
+        START_CMD='["sh"]'
+    fi
+
+    # 动态生成跨架构 Dockerfile
+    cat <<EOF > Dockerfile.universal
+FROM $DOCKER_BASE
+WORKDIR /app
+COPY . .
+# 安装编译原生模块所需的依赖
+RUN apt-get update && apt-get install -y python3 make g++ curl && rm -rf /var/lib/apt/lists/*
+RUN $BUILD_CMD
+EXPOSE 18789
+CMD $START_CMD
+EOF
+
+    # 构建镜像
+    echo -e "${BLUE}[4/5] 正在打包 Docker 镜像 (适配当前 CPU 架构)...${NC}"
+    docker build -t "$PROJ_NAME-img" -f Dockerfile.universal .
+
+    # 清理旧容器
+    docker stop "$PROJ_NAME-container" 2>/dev/null
+    docker rm "$PROJ_NAME-container" 2>/dev/null
+
+    # 智能挂载逻辑
+    VOLUMES=""
+    [ -f ".env" ] && VOLUMES="$VOLUMES -v $PROJ_DIR/.env:/app/.env"
+    # OpenClaw 特有挂载
+    [[ "$PROJ_NAME" == *"openclaw"* ]] && VOLUMES="$VOLUMES -v /root/.openclaw:/root/.openclaw"
+
+    # 启动容器
+    echo -e "${BLUE}[5/5] 正在启动容器...${NC}"
+    docker run -d --name "$PROJ_NAME-container" \
+        $VOLUMES \
+        -p 18789:18789 \
+        --restart always \
+        "$PROJ_NAME-img"
+
+    echo -e "${GREEN}✅ 部署成功！${NC}"
+    echo -e "${YELLOW}容器名称：${NC} $PROJ_NAME-container"
+    echo -e "${YELLOW}查看日志命令：${NC} docker logs -f $PROJ_NAME-container"
+}
+
+# 3. 维护菜单
+manage_menu() {
+    while true; do
+        echo -e "\n${BLUE}--- OpenClaw & 通用项目万能部署工具 ---${NC}"
+        echo -e "1. 【一键部署/更新项目】"
+        echo -e "2. 【查看运行中的容器】"
+        echo -e "3. 【停止并删除指定项目】"
+        echo -e "0. 退出"
+        read -p "选择操作: " opt
+        case $opt in
+            1) check_env; deploy_project ;;
+            2) docker ps ;;
+            3) 
+                read -p "输入项目名: " name
+                docker stop "$name-container" && docker rm "$name-container"
+                echo -e "${GREEN}已清理。${NC}"
+                ;;
+            0) exit 0 ;;
+            *) echo "无效选项" ;;
+        esac
+    done
+}
+
+manage_menu

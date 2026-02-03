@@ -6,103 +6,105 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== 机器环境一键修复与 ClawBot 安装脚本 ===${NC}"
+echo -e "${GREEN}===============================================${NC}"
+echo -e "${GREEN}   ClawBot (OpenClaw) 环境全能修复脚本 V2.0    ${NC}"
+echo -e "${GREEN}   支持架构: ARM / x86_64 | 适配: Node v22     ${NC}"
+echo -e "${GREEN}===============================================${NC}"
 
 menu() {
-    echo -e "${YELLOW}1. 检查并清理当前系统 Node 环境 (彻底卸载旧版)${NC}"
-    echo -e "${YELLOW}2. 强力清除所有 NVM/Node 残留 (清空环境)${NC}"
-    echo -e "${YELLOW}3. 安装 NVM 与 Node v22 (推荐)${NC}"
-    echo -e "${YELLOW}4. 一键安装/修复 ClawBot (源码版)${NC}"
-    echo -e "${YELLOW}0. 退出脚本${NC}"
-    read -p "请输入数字选择: " choice
+    echo -e "\n${YELLOW}请选择操作：${NC}"
+    echo -e "1. 【清理】彻底卸载系统旧版 Node.js (解决路径冲突)"
+    echo -e "2. 【清空】强力删除 NVM 及所有残留 (环境重置)"
+    echo -e "3. 【安装】部署 NVM 与 Node v22 + pnpm (核心环境)"
+    echo -e "4. 【部署】一键安装、编译并启动 ClawBot"
+    echo -e "0. 退出脚本"
+    echo "-----------------------------------------------"
+    read -p "请输入数字 [0-4]: " choice
 
     case $choice in
         1) clean_system_node ;;
         2) deep_purge ;;
-        3) install_nvm ;;
+        3) install_env ;;
         4) install_clawbot ;;
         0) exit 0 ;;
-        *) echo "无效输入"; menu ;;
+        *) echo -e "${RED}无效输入，请重新选择${NC}"; menu ;;
     esac
 }
 
-# 1. 清理系统 Node (针对 apt 安装的混乱环境)
+# 1. 彻底卸载系统自带 Node
 clean_system_node() {
     echo -e "${YELLOW}正在清理系统级 Node.js...${NC}"
     sudo apt-get remove --purge -y nodejs npm
     sudo apt-get autoremove -y
     sudo rm -rf /usr/local/bin/node /usr/local/bin/npm /usr/local/lib/node_modules
     sudo rm -rf /usr/bin/node /usr/bin/npm
-    echo -e "${GREEN}清理完成！${NC}"
+    echo -e "${GREEN}系统级环境已清理干净！${NC}"
     menu
 }
 
-# 2. 强力清除残留
+# 2. 强力清除所有 NVM 残留
 deep_purge() {
-    echo -e "${RED}警告：这将删除所有 NVM 数据和 Node 环境！${NC}"
-    read -p "确定吗? (y/n): " confirm
+    echo -e "${RED}警告：这将删除所有已安装的 Node 版本和 NVM 配置！${NC}"
+    read -p "确定要重置吗? (y/n): " confirm
     if [ "$confirm" == "y" ]; then
-        rm -rf ~/.nvm ~/.npm ~/.bower
+        rm -rf ~/.nvm ~/.npm ~/.pnpm-state
         sed -i '/NVM_DIR/d' ~/.bashrc
-        echo -e "${GREEN}所有残留已清除，请运行 'source ~/.bashrc' 或重新连接终端。${NC}"
+        echo -e "${GREEN}环境已完全清空，请重新连接 SSH 或运行 'source ~/.bashrc'。${NC}"
     fi
     menu
 }
 
-# 3. 安装 NVM 与 Node
-install_nvm() {
-    echo -e "${YELLOW}正在安装 NVM...${NC}"
+# 3. 安装 NVM、Node v22 和 pnpm
+install_env() {
+    echo -e "${YELLOW}正在安装 NVM (Node Version Manager)...${NC}"
     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
     
-    # 立即在当前脚本环境中激活 NVM
+    # 立即激活 NVM
     export NVM_DIR="$HOME/.nvm"
     [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
     
-    echo -e "${YELLOW}正在通过 NVM 安装 Node v22...${NC}"
+    echo -e "${YELLOW}正在安装 Node v22 (当前最稳定版本)...${NC}"
     nvm install 22
     nvm use 22
     nvm alias default 22
     
-    echo -e "${YELLOW}安装全局必要工具: pnpm, pm2...${NC}"
+    echo -e "${YELLOW}安装全局必备工具 (pnpm & pm2)...${NC}"
     npm install -g pnpm pm2
     
-    echo -e "${GREEN}Node 环境就绪: $(node -v)${NC}"
+    echo -e "${GREEN}环境就绪！当前版本: $(node -v)${NC}"
     menu
 }
 
-# 4. 安装/修复 ClawBot
+# 4. 一键安装、编译并启动 ClawBot
 install_clawbot() {
-    # 自动识别架构
-    ARCH=$(uname -m)
-    echo -e "${YELLOW}当前机器架构: $ARCH${NC}"
-
-    if [ ! -d "openclaw" ]; then
-        echo -e "${YELLOW}未检测到 openclaw 目录，正在从源码下载...${NC}"
-        # 这里替换成你实际的仓库地址，如果不确定请先手动 git clone
-        # git clone https://github.com/xxxxx/openclaw.git
+    if [ ! -d "/root/openclaw" ]; then
+        echo -e "${RED}错误：未在 /root/openclaw 找到源码。请先确保已下载代码。${NC}"
+        menu
+        return
     fi
 
-    cd openclaw || { echo -e "${RED}目录不存在！${NC}"; menu; return; }
+    cd /root/openclaw || exit
 
-    echo -e "${YELLOW}正在清理旧依赖并重装...${NC}"
-    rm -rf node_modules package-lock.json
-    
-    # 确保 pnpm 存在
-    if ! command -v pnpm &> /dev/null; then
-        npm install -g pnpm
-    fi
+    echo -e "${YELLOW}正在安装项目依赖...${NC}"
+    # 确保在当前环境下有 pnpm
+    npm install -g pnpm
+    pnpm install
 
-    npm install
-    
+    echo -e "${YELLOW}正在编译 TypeScript (生成 dist 文件夹)...${NC}"
+    pnpm run build
+
     if [ ! -f ".env" ]; then
+        echo -e "${YELLOW}未检测到配置文件，正在从模板创建...${NC}"
         cp .env.example .env
-        echo -e "${GREEN}已创建 .env 配置文件，请稍后手动修改。${NC}"
     fi
 
-    echo -e "${GREEN}ClawBot 依赖安装与构建完成！${NC}"
-    echo -e "${YELLOW}提示：输入 'npm start' 或使用 'pm2 start npm -- start' 运行。${NC}"
+    echo -e "${GREEN}✅ 编译完成！现在可以启动机器人了。${NC}"
+    read -p "是否立即启动配置菜单? (y/n): " run_now
+    if [ "$run_now" == "y" ]; then
+        npm start
+    fi
     menu
 }
 
-# 运行菜单
+# 启动菜单
 menu

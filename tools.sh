@@ -51,6 +51,12 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
+# 增强输出函数
+msg_ok()   { echo -e "${GREEN}✓${NC} $1"; }
+msg_warn() { echo -e "${YELLOW}⚠${NC} $1"; }
+msg_info() { echo -e "${CYAN}ℹ${NC} $1"; }
+msg_err()  { echo -e "${RED}✗${NC} $1"; }
+
 # ============================================================================
 # 工具函数
 # ============================================================================
@@ -312,13 +318,12 @@ EOF
         
         cat <<'EOF'
  ▸ 服务与容器
-   [1] 注册服务    [4] Docker     [7] 添加路由
-   [2] 管理服务    [5] 容器管理    [8] 管理路由
-   [3] 定时任务    [6] Caddy      [9] Tailscale
+   [1] 注册服务    [4] Docker 管理   [7] Caddy 管理
+   [2] 管理服务    [5] Tailscale      [8] 1Panel
+   [3] 定时任务    [6] 系统设置       [9] Root SSH
    
- ▸ 网络与系统
-   [10] Exit Node  [12] 时区      [U] 🔄 更新脚本
-   [11] 1Panel     [13] Root SSH  [0] 退出
+ ▸ 其他
+   [U] 🔄 更新脚本  [0] 退出
 ════════════════════════════════════════════════════════════
 EOF
         read -p "请选择 (支持 tt, tc, C1, L1): " choice
@@ -337,16 +342,12 @@ EOF
             1) register_binary_service ;;
             2) manage_services ;;
             3) cron_management ;;
-            4) install_docker_compose ;;
-            5) docker_container_management ;;
-            6) install_caddy ;;
-            7) add_caddy_route ;;
-            8) manage_caddy_routes ;;
-            9) install_tailscale ;;
-            10) configure_exit_node ;;
-            11) install_1panel ;;
-            12) change_timezone ;;
-            13) enable_root_ssh ;;
+            4) docker_unified_management ;;
+            5) install_tailscale ;;
+            6) system_settings_menu ;;
+            7) caddy_unified_management ;;
+            8) install_1panel ;;
+            9) enable_root_ssh ;;
             U) update_script ;;
             0) exit 0 ;;
             *) 
@@ -859,167 +860,234 @@ cron_management() {
 }
 
 # ============================================================================
-# Caddy 路由修复和管理 (新增/修改)
+# Caddy 综合管理 (集成 caddy-manager.sh)
 # ============================================================================
 
-add_caddy_route() {
-    check_root
-    print_info "Caddy 路由添加向导 (使用 127.0.0.1 进行反向代理) "
-    
-    read -p "请输入域名 (如 example.com): " domain
-    [[ -z "$domain" ]] && print_error "域名不能为空" && sleep 1 && return
-    
-    read -p "请输入路径前缀 (如 /panel, /v2ray, 留空则为 /): " path_prefix
-    path_prefix=${path_prefix:-"/"}
-    
-    read -p "请输入后端本地端口 (如 39390): " local_port
-    [[ ! "$local_port" =~ ^[0-9]+$ ]] && print_error "端口号无效" && sleep 1 && return
+CADDY_CONFIG="/etc/caddy/Caddyfile"
 
-    local proxy_target="127.0.0.1:$local_port"
-    local caddyfile_path="/etc/caddy/Caddyfile"
-    local new_route=""
-    
-    # 查找或创建域名配置块
-    if grep -q "^$domain {" "$caddyfile_path"; then
-        # 域名已存在，将新路由插入到最后一个 } 之前
-        new_route=$(cat <<EOF
-    handle $path_prefix* {
-        reverse_proxy $proxy_target
-    }
-EOF
-)
-        # 使用 sed 插入到倒数第二个 } 之前 (注意：这在复杂的Caddyfile中可能不可靠)
-        # 尝试追加到文件末尾，让用户自行调整
-        echo -e "\n# --- Route Added by tools.sh ---" | sudo tee -a "$caddyfile_path" > /dev/null
-        echo -e "$domain {" | sudo tee -a "$caddyfile_path" > /dev/null
-        echo -e "$new_route" | sudo tee -a "$caddyfile_path" > /dev/null
-        echo -e "}" | sudo tee -a "$caddyfile_path" > /dev/null
-        print_warning "新的路由配置已追加到 $caddyfile_path 末尾，请手动检查重复的域名块并清理。"
+reload_caddy() {
+    msg_info "🔄 正在同步 Caddy 配置..."
+    if ! systemctl is-active --quiet caddy; then
+        msg_warn "⚠️ Caddy 处于停止状态，尝试启动..."
+        systemctl start caddy && msg_ok "✅ Caddy 已启动" || msg_err "❌ 启动失败"
     else
-        # 域名不存在，创建新的配置块
-        new_route=$(cat <<EOF
-$domain {
-    handle $path_prefix* {
-        reverse_proxy $proxy_target
-    }
-}
-EOF
-)
-        # 将新配置追加到文件末尾
-        echo -e "\n# --- Route Added by tools.sh ---" | sudo tee -a "$caddyfile_path" > /dev/null
-        echo -e "$new_route" | sudo tee -a "$caddyfile_path" > /dev/null
+        if caddy reload --config "$CADDY_CONFIG" >/dev/null 2>&1; then
+            msg_ok "✅ 配置热重载成功"
+        else
+            msg_warn "⚠️ 热重载失败，尝试重启服务..."
+            systemctl restart caddy && msg_ok "✅ Caddy 已重启" || msg_err "❌ 重启失败"
+        fi
     fi
-
-    # 保存到本地记录 (方便管理和删除)
-    local up=$(jq ".caddy_routes += [{\"domain\":\"$domain\", \"path\":\"$path_prefix\", \"port\":\"$local_port\"}]" "$LOCAL_DATA")
-    echo "$up" > "$LOCAL_DATA"
-    
-    # 重新加载 Caddy 服务
-    if sudo systemctl reload caddy; then
-        print_success "路由添加成功，Caddy 已重新加载!"
-        print_info "访问地址: https://$domain$path_prefix"
-    else
-        print_error "Caddy 重载失败，请检查 Caddyfile 语法 (按 8 进入管理菜单查看日志)"
-    fi
-    sleep 3
 }
 
-manage_caddy_routes() {
+caddy_unified_management() {
     check_root
     while true; do
         clear
-        echo "╔════════════════════════════════════════════════════════════╗"
-        echo "║    Caddy 路由管理"
-        echo "╚════════════════════════════════════════════════════════════╝"
-        
-        local routes=$(jq -r '.caddy_routes[] | "\(.domain) | \(.path) | \(.port)"' "$LOCAL_DATA" 2>/dev/null)
-        if [[ -z "$routes" ]]; then
-            print_warning "暂无已配置的路由"
-            echo ""
-        else
-            echo " ▸ 已配置路由 (ID | 域名 | 路径 | 端口)"
-            echo "$routes" | nl -w2 -s' | '
-            echo ""
-        fi
-        
-        read -p "[R]重新加载 [D]删除记录 [L]查看日志 [E]编辑Caddyfile [0]返回: " choice
-        [[ "$choice" == "0" ]] && return
-
-        case $choice in
-            [Rr])
-                if sudo systemctl reload caddy; then
-                    print_success "Caddy 重新加载成功"
-                else
-                    print_error "Caddy 重载失败，请检查语法"
-                    journalctl -u caddy -n 10 --no-pager
-                fi
-                sleep 2
-                ;;
-            [Dd])
-                read -p "输入要删除的路由 ID: " n
-                if [[ ! "$n" =~ ^[0-9]+$ ]] || [[ "$n" -eq 0 ]]; then continue; fi
-                
-                local index=$((n-1))
-                local route_info=$(jq -r ".caddy_routes[$index] | \"\(.domain)|\(.path)|\(.port)\"" "$LOCAL_DATA" 2>/dev/null)
-                
-                if [[ -z "$route_info" ]]; then print_error "ID 无效"; sleep 1; continue; fi
-
-                local domain=$(echo "$route_info" | cut -d'|' -f1)
-                local path=$(echo "$route_info" | cut -d'|' -f2)
-                
-                print_warning "您正在删除路由记录 $domain $path -> 127.0.0.1:$port"
-                print_error "⚠️ 警告：本工具无法自动修改 Caddyfile，请您手动编辑 /etc/caddy/Caddyfile 移除相关配置。"
-                read -p "确认要删除 local.json 中的记录? (请先手动清理 Caddyfile) [y/N]: " confirmed
-                
-                if [[ "$confirmed" =~ ^[Yy]$ ]]; then
-                    # 从 local.json 中删除记录
-                    jq "del(.caddy_routes[$index])" "$LOCAL_DATA" > "$LOCAL_DATA.tmp" && mv "$LOCAL_DATA.tmp" "$LOCAL_DATA"
-                    print_success "路由记录删除成功！请确保 Caddyfile 已手动清理并重载 Caddy (R)"
-                else
-                    print_info "取消删除"
-                fi
-                sleep 3
-                ;;
-            [Ee])
-                nano /etc/caddy/Caddyfile
-                ;;
-            [Ll])
-                journalctl -u caddy -n 50 --no-pager
-                read -p "按回车继续..."
-                ;;
-            *)
-                print_error "无效选择"
-                sleep 1
-                ;;
+        echo "╔══════════════════════════════════════════════════════╗"
+        echo "║    🛡️  Caddy 智能网关管理系统"
+        echo "╚══════════════════════════════════════════════════════╝"
+        echo " 1) 🔍 环境审计 (Check)"
+        echo " 2) 🤖 智能修复 (自动迁移冲突端口)"
+        echo " 3) 🌐 域名管理 (添加/删除/列表)"
+        echo " 4) 📦 服务端口一键映射 (反代)"
+        echo " 5) 🚥 查看运行状态与日志"
+        echo " 6) 🔐 Basic Auth 开关"
+        echo " 7) 📥 安装 Caddy"
+        echo " 0) 返回"
+        echo "--------------------------------------------------------"
+        read -p " 请选择指令: " cchoice
+        case $cchoice in
+            1) caddy_check_env; read -p "回车继续..." ;;
+            2) caddy_fix_conflicts; read -p "回车继续..." ;;
+            3) caddy_domain_menu ;;
+            4) caddy_add_proxy_ui ;;
+            5) clear; caddy fmt "$CADDY_CONFIG" && systemctl status caddy; journalctl -u caddy -n 20 --no-pager; read -p "回车继续..." ;;
+            6) caddy_toggle_auth ;;
+            7) install_caddy_official ;;
+            0) return ;;
         esac
     done
 }
 
+caddy_check_env() {
+    msg_ok "🔎 正在执行系统环境审计..."
+    command -v caddy >/dev/null && msg_ok "Caddy 已安装: $(caddy version | head -n1)" || msg_warn "未发现 Caddy"
+    command -v nginx >/dev/null && msg_warn "⚠ 发现 Nginx 已安装，可能存在端口冲突"
+    
+    for port in 80 443; do
+        local pids=$(lsof -t -i :$port -sTCP:LISTEN)
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                local proc=$(ps -p $pid -o comm= 2>/dev/null || echo "unknown")
+                msg_err "⚠ 端口 $port 被占用! PID: $pid ($proc)"
+            done
+        else
+            msg_ok "✓ 端口 $port 可用"
+        fi
+    done
+}
 
-install_caddy() {
-    check_root
-    print_info "正在安装 Caddy..."
-    # 确保依赖安装
-    apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+caddy_fix_conflicts() {
+    msg_warn "🚀 正在尝试强行抢占 80/443 端口..."
+    for port in 80 443; do
+        local pids=$(lsof -t -i :$port -sTCP:LISTEN)
+        if [ -n "$pids" ]; then
+            msg_warn "正在关闭占用 $port 端口的进程: $pids"
+            kill -9 $pids 2>/dev/null && msg_ok "端口 $port 已释放"
+        fi
+    done
+}
+
+caddy_domain_menu() {
+    while true; do
+        clear
+        echo " ▸ 当前已配域名："
+        local domains=($(awk '/^[a-zA-Z0-9.-]+ \{/ {print $1}' "$CADDY_CONFIG" 2>/dev/null))
+        for d in "${domains[@]}"; do echo "   • $d"; done
+        echo "----------------------------------------"
+        echo " 1) 添加新域名头  2) 删除域名配置  0) 返回"
+        read -p "选择: " d_opt
+        case $d_opt in
+            1)
+                read -p "域名: " ndomain
+                [[ -n "$ndomain" ]] && echo -e "\n$ndomain {\n    # Added by tools.sh\n}" >> "$CADDY_CONFIG" && msg_ok "已添加" && reload_caddy ;;
+            2)
+                read -p "输入要删除的完整域名: " rdomain
+                [[ -n "$rdomain" ]] && sed -i "/^$rdomain {/,/^}/d" "$CADDY_CONFIG" && msg_ok "已删除" && reload_caddy ;;
+            0) return ;;
+        esac
+        sleep 1
+    done
+}
+
+caddy_add_proxy_ui() {
+    read -p "请输入要绑定的域名 (需先存在): " domain
+    if ! grep -q "^$domain {" "$CADDY_CONFIG"; then msg_err "域名未配置"; sleep 1; return; fi
+    read -p "请输入要反代的本地端口: " port
+    read -p "请输入子路径 (如 /vnc, 留空为 /): " path
+    path=${path:-"/"}
     
-    # Caddy 官方安装流程
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
-    apt-get update && apt-get install -y caddy
-    
-    # 确保 Caddyfile 存在，并尝试启动
-    if [[ ! -f "/etc/caddy/Caddyfile" ]]; then
-        # 默认使用 http://example.com 自动申请证书并代理到 8080 (标准 Caddy 默认配置)
-        echo -e ":80 {\n\treverse_proxy localhost:8080\n}" | sudo tee /etc/caddy/Caddyfile > /dev/null
-        print_info "已创建默认 Caddyfile，代理到 localhost:8080"
+    local indent="    "
+    if [[ "$path" == "/" ]]; then
+        sed -i "/^$domain {/a \\${indent}reverse_proxy localhost:$port" "$CADDY_CONFIG"
+    else
+        local block="${indent}handle_path $path/* {\n${indent}    reverse_proxy localhost:$port\n${indent}}"
+        sed -i "/^$domain {/a \\$block" "$CADDY_CONFIG"
     fi
+    msg_ok "路由已添加"; reload_caddy; sleep 1
+}
 
-    # 启用并启动服务
-    sudo systemctl enable caddy
-    sudo systemctl start caddy
-    
-    print_success "Caddy 安装并启动完成"; 
-    sleep 2
+caddy_toggle_auth() {
+    msg_info "此功能将为选定域名设置简单认证 (admin:password)"
+    read -p "请输入要操作的域名: " domain
+    if sed -n "/^$domain {/,/^}/p" "$CADDY_CONFIG" | grep -q 'basic_auth'; then
+        sed -i "/^$domain {/,/^}/ { /basic_auth {/,/^    }/d }" "$CADDY_CONFIG"
+        msg_ok "已关闭认证"
+    else
+        local hash=$(caddy hash-password --plaintext "password" 2>/dev/null)
+        sed -i "/^$domain {/a \\    basic_auth {\n        admin $hash\n    }" "$CADDY_CONFIG"
+        msg_ok "已启用认证 (admin:password)"
+    fi
+    reload_caddy; sleep 1
+}
+
+install_caddy_official() {
+    msg_info "正在安装 Caddy..."
+    apt-get update && apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg 2>/dev/null || true
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.debian.list' | tee /etc/apt/sources.list.d/caddy-stable.list
+    apt-get update && apt-get install -y caddy
+    systemctl enable caddy && systemctl start caddy
+    msg_ok "安装完成"
+}
+
+# ============================================================================
+# Docker 综合管理 (升级版)
+# ============================================================================
+
+docker_unified_management() {
+    while true; do
+        clear
+        echo "╔══════════════════════════════════════════════════════╗"
+        echo "║    🐳 Docker & Compose 综合管理"
+        echo "╚══════════════════════════════════════════════════════╝"
+        
+        if ! command -v docker &>/dev/null; then
+            msg_warn "Docker 未安装"
+            echo " [I] 一键安装 Docker & Compose"
+        else
+            echo " ▸ 容器列表："
+            docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | nl -w2 -s' | '
+        fi
+        echo "--------------------------------------------------------"
+        echo " [S]启动 [P]停止 [R]重启 [D]删除 [L]日志 [E]进入Shell"
+        echo " [F]文件浏览 [V]详细信息 [I]下载/更新 Docker [0]返回"
+        read -p " 请选择 (操作请加行号, 如 S1): " d_input
+        [[ "$d_input" == "0" ]] && return
+        
+        if [[ "$d_input" =~ ^[Ii]$ ]]; then
+            curl -fsSL https://get.docker.com | sh
+            apt-get install -y docker-compose-plugin
+            msg_ok "安装完成"; sleep 1; continue
+        fi
+
+        local op=$(echo "${d_input:0:1}" | tr '[:lower:]' '[:upper:]')
+        local idx="${d_input:1}"
+        [[ -z "$idx" ]] && continue
+        
+        local target_name=$(docker ps -a --format "{{.Names}}" | sed -n "${idx}p")
+        [[ -z "$target_name" ]] && msg_err "无效行号" && sleep 1 && continue
+
+        case $op in
+            S) docker start "$target_name" && msg_ok "已启动" ;;
+            P) docker stop "$target_name" && msg_ok "已停止" ;;
+            R) docker restart "$target_name" && msg_ok "已重启" ;;
+            D) read -p "确认删除 $target_name? [y/N]: " confirm && [[ "$confirm" =~ ^[Yy]$ ]] && docker rm -f "$target_name" && msg_ok "已删除" ;;
+            L) docker logs --tail 50 "$target_name"; read -p "回车继续..." ;;
+            E) docker exec -it "$target_name" sh || docker exec -it "$target_name" bash ;;
+            V) docker inspect "$target_name" | jq '.[0].NetworkSettings.Ports'; read -p "回车继续..." ;;
+            F) docker_file_browser "$target_name" ;;
+        esac
+        sleep 0.5
+    done
+}
+
+docker_file_browser() {
+    local container="$1"
+    local path="/"
+    while true; do
+        clear
+        echo "📂 容器 [$container] 文件浏览: $path"
+        echo "----------------------------------------"
+        docker exec "$container" ls -F "$path" 2>/dev/null || msg_err "无法读取路径"
+        echo "----------------------------------------"
+        echo " [CD]切换路径 [U]上级目录 [0]返回"
+        read -p "指令: " f_opt
+        case $(echo "$f_opt" | tr '[:lower:]' '[:upper:]') in
+            CD) read -p "进入目录名: " ndir; path="${path%/}/$ndir" ;;
+            U) path=$(dirname "$path") ;;
+            0) return ;;
+        esac
+    done
+}
+
+system_settings_menu() {
+    while true; do
+        clear
+        echo "╔══════════════════════════════════════════════════════╗"
+        echo "║    ⚙️  系统与环境设置"
+        echo "╚══════════════════════════════════════════════════════╝"
+        echo " [1] 时区设置"
+        echo " [2] Exit Node 配置 (Tailscale)"
+        echo " [0] 返回"
+        read -p "选择: " s_choice
+        case $s_choice in
+            1) dpkg-reconfigure tzdata ;;
+            2) configure_exit_node ;;
+            0) return ;;
+        esac
+    done
 }
 # ============================================================================
 # 其他原有功能 (保持不变)
@@ -1030,35 +1098,13 @@ configure_exit_node() {
     sleep 2
 }
 
-change_timezone() {
-    print_info "时区设置功能暂未实现"
-    sleep 2
-}
-
 enable_root_ssh() {
-    print_info "Root SSH 启用功能暂未实现"
+    print_info "正在启用 Root SSH 登录..."
+    sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
+    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+    service ssh restart
+    print_success "已开启 Root SSH 登录，请确保已设置 Root 密码。"
     sleep 2
-}
-
-install_docker_compose() {
-    if ! command -v docker &>/dev/null; then curl -fsSL https://get.docker.com | sh; fi
-    apt-get install -y docker-compose-plugin
-    print_success "Docker 安装完成"; sleep 2
-}
-
-docker_container_management() {
-    while true; do
-        clear; docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}" | nl
-        echo ""; read -p "[S]启 [P]停 [R]重启 [D]删 [L]日志 [E]进 [0]返: " c
-        [[ $c == 0 ]] && return
-        read -p "行号(非ID): " n; id=$(docker ps -a --format "{{.ID}}" | sed -n "$((n-1))p")
-        [[ -z "$id" ]] && continue
-        case $c in
-            S|s) docker start "$id" ;; P|p) docker stop "$id" ;; R|r) docker restart "$id" ;;
-            D|d) docker rm -f "$id" ;; L|l) docker logs --tail 20 "$id"; read -p "..." ;;
-            E|e) docker exec -it "$id" sh ;;
-        esac
-    done
 }
 
 

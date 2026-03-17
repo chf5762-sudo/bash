@@ -2,8 +2,7 @@
   "commands": [
     {
       "id": 1,
-      "command": "vmpt=\"2052\" hypt=\"50004\"  uuid=\"57628066-f4a3-47cf-85dc-560d92d4b856\" cdnym=\"chf5762.cloudns.org\" ippz=\"4\" bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh) rep",
-      "added_time": "2025-11-16T12:39:47Z"
+      "command": wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh" && chmod +x /root/install.sh && /root/install.sh
     },
     {
       "id": 2,
@@ -12,41 +11,11 @@
     },
     {
       "id": 3,
-      "command": "systemctl restart caddy",
-      "favorite": false,
-      "added_time": "2025-12-31T08:10:49Z"
-    },
-    {
-      "id": 4,
       "command": "speaker-test -t wav -c 2 -l 2",
       "favorite": false,
       "added_time": "2025-12-31T08:22:41Z"
     },
-    {
-      "id": 5,
-      "command": "docker run -d --name kkfileview --restart=always -p 8012:8012 yimik/kkfileview:latest",
-      "favorite": false,
-      "added_time": "2026-01-01T01:40:27Z"
-    },
-    {
-      "id": 6,
-      "command": "docker run -d --name=maxkb --restart=always -p 3007:8080 -v C:/maxkb:/opt/maxkb 1panel/maxkb",
-      "favorite": false,
-      "added_time": "2026-01-01T01:41:50Z"
-    },
-    {
-      "id": 7,
-      "command": "docker run -d   --name firefox-selenium   --restart=unless-stopped   -p 4444:4444   -p 7900:7900   -e SE_VNC_NO_PASSWORD=1   -e SE_SCREEN_WIDTH=1920   -e SE_SCREEN_HEIGHT=1080   -v ~/firefox-data:/home/seluser   --shm-size=2g   seleniarm/standalone-firefox",
-      "favorite": false,
-      "added_time": "2026-01-03T13:22:36Z"
-    },
-    {
-      "id": 8,
-      "command": "docker run -d   --name derper   --restart always   -p 127.0.0.1:9443:80   -p 3478:3478/udp   tailscale/derper:latest   /derper -a :80 -http-port 80 -hostname=derp.beundredig.eu.org -stun",
-      "favorite": false,
-      "added_time": "2026-01-08T06:36:47Z"
-    }
-  ],
+
   "scripts": [
     {
       "id": 1,

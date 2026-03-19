@@ -2,7 +2,7 @@
   "commands": [
     {
       "id": 1,
-      "command": wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh" && chmod +x /root/install.sh && /root/install.sh
+     "command": "vmpt=\"2052\" hypt=\"50004\"  uuid=\"57628066-f4a3-47cf-85dc-560d92d4b856\" cdnym=\"chf5762.cloudns.org\" ippz=\"4\" bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh) rep",
     },
     {
       "id": 2,

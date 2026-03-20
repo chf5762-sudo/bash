@@ -1,8 +1,12 @@
 {
   "commands": [
     {
-      "id": 1,
-     vmpt="2052" hypt="8443" uuid="57628066-f4a3-47cf-85dc-560d92d4b856" bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh) rep
+      "id": 1, 先删除，然后重装，避免报错
+      bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh)  Del  
+      vmpt="2052" hypt="8443" uuid="57628066-f4a3-47cf-85dc-560d92d4b856" bash <(curl -Ls https://raw.githubusercontent.com/yonggekkk/argosbx/main/argosbx.sh) rep
+
+
+ 
     {
       "id": 2,
       "command": "docker run -d -p 8181:8181 --name fuclaude-app pengzhile/fuclaude:latest",
